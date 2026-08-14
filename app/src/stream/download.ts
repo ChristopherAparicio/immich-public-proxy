@@ -1,6 +1,6 @@
 import { assetFetchUrl, authHeadersForAsset } from '../immich'
 import { Response } from 'express-serve-static-core'
-import { Asset, ImageSize, SharedLink } from '../types'
+import { Asset, SharedLink } from '../types'
 import { getNumericConfigOption } from '../config/access'
 import { log } from '../utils/log'
 import archiver, { Archiver } from 'archiver'
@@ -10,7 +10,7 @@ import { pipeline } from 'stream/promises'
 import { promises as fs, createWriteStream } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
-import { resolveImageEndpoint, ImageEndpoint } from '../gallery/sizing'
+import { resolveDownloadEndpoint, ImageEndpoint } from '../gallery/sizing'
 import { title } from '../share'
 import { getFilename } from '../gallery/filename'
 import { createLimiter } from '../utils/limiter'
@@ -104,7 +104,7 @@ export async function downloadAssets (res: Response, share: SharedLink, assets: 
   const abortFlag: AbortFlag = { aborted: false }
 
   try {
-    const stages = stageAssetsToDisk(assets, options, abortFlag)
+    const stages = stageAssetsToDisk(share, assets, options, abortFlag)
     const failure = await archiveStaged(archive, stages, abortFlag)
     if (failure) {
       abortDownload(archive, res, share, failure)
@@ -123,9 +123,9 @@ export async function downloadAssets (res: Response, share: SharedLink, assets: 
  * concurrently. Returns the promise array in input order so the consumer can
  * archive in order.
  */
-function stageAssetsToDisk (assets: Asset[], options: StagingOptions, abortFlag: AbortFlag): Promise<StageOutcome>[] {
+function stageAssetsToDisk (share: SharedLink, assets: Asset[], options: StagingOptions, abortFlag: AbortFlag): Promise<StageOutcome>[] {
   const limit = createLimiter(options.concurrency)
-  return assets.map((asset, index) => limit(() => stageOne(asset, index, options, abortFlag)))
+  return assets.map((asset, index) => limit(() => stageOne(share, asset, index, options, abortFlag)))
 }
 
 /**
@@ -173,10 +173,10 @@ function abortDownload (archive: Archiver, res: Response, share: SharedLink, fai
  * Returns the staged asset on success, a wrapped Failure on error, or null
  * if we observed the abort flag and bailed without doing work.
  */
-async function stageOne (asset: Asset, index: number, options: StagingOptions, abortFlag: AbortFlag): Promise<StageOutcome> {
+async function stageOne (share: SharedLink, asset: Asset, index: number, options: StagingOptions, abortFlag: AbortFlag): Promise<StageOutcome> {
   if (abortFlag.aborted) return null
 
-  const endpoint = resolveImageEndpoint(ImageSize.original, asset)
+  const endpoint = resolveDownloadEndpoint(asset, share.allowDownload !== false)
   const url = assetFetchUrl(asset, endpoint.subpath, endpoint.sizeQueryParam)
   const reqAuthHeaders = await authHeadersForAsset(asset)
 
