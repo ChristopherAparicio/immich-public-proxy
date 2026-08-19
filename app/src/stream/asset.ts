@@ -79,7 +79,12 @@ export async function assetBuffer (req: IncomingShareRequest, res: Response, ass
   }
 
   if (attachment && asset.originalFileName) {
-    const filename = encodeURI(getFilename(asset, servedSize))
+    // Playback downloads serve Immich's transcode, so the filename extension
+    // must follow the response's content-type, not the original file's.
+    const playbackMime = useVideoPlayback
+      ? (data.headers.get('content-type') || '').split(';')[0].trim() || undefined
+      : undefined
+    const filename = encodeURI(getFilename(asset, servedSize, playbackMime))
     res.setHeader('Content-Disposition', `attachment; filename*=UTF-8''${filename}`)
   }
   headerList.forEach(header => {
