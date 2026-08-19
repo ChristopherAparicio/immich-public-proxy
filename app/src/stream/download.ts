@@ -52,8 +52,6 @@ type StagedAsset = { tempfile: string, asset: Asset, endpoint: ImageEndpoint }
 type Failure = { asset: Asset, url: string, status?: number, error?: unknown }
 type StageOutcome = StagedAsset | { failure: Failure } | null
 
-type AbortFlag = { aborted: boolean }
-
 type StagingOptions = {
   stagingDir: string
   concurrency: number
@@ -92,6 +90,8 @@ export async function downloadAssets (res: Response, share: SharedLink, assets: 
   // Hint to intermediate proxies (Nginx, etc.) not to buffer this response.
   res.setHeader('X-Accel-Buffering', 'no')
   const archive = archiver('zip', { store: true })
+  // Without a listener, an archiver 'error' emission would crash the process.
+  archive.on('error', e => log(`Archiver error for share ${share.key}: ${e.message}`))
   archive.pipe(res)
 
   const options: StagingOptions = {
@@ -101,18 +101,43 @@ export async function downloadAssets (res: Response, share: SharedLink, assets: 
     headerTimeoutMs: 20_000,
     idleTimeoutMs: 20_000
   }
-  const abortFlag: AbortFlag = { aborted: false }
+
+  const controller = new AbortController()
+  let clientGone = false
+  let resolveClosed!: () => void
+  const resClosed = new Promise<void>(resolve => { resolveClosed = resolve })
+  res.once('close', () => {
+    if (res.writableFinished) return
+    clientGone = true
+    controller.abort()
+    resolveClosed()
+  })
 
   try {
-    const stages = stageAssetsToDisk(assets, options, abortFlag)
-    const failure = await archiveStaged(archive, stages, abortFlag)
+    const stages = stageAssetsToDisk(assets, options, controller.signal)
+    const failure = await archiveStaged(archive, stages, controller)
+    if (clientGone) {
+      log(`Zip download for share ${share.key} cancelled by client`)
+      archive.abort()
+      return
+    }
     if (failure) {
       abortDownload(archive, res, share, failure)
       return
     }
     // finalize() resolves when archiver has finished writing the zip output,
     // which means every queued tempfile has been read. Safe to delete after.
-    await archive.finalize()
+    // Raced against client disconnect because finalize() never settles once
+    // the response is destroyed. The inline rejection handler also stops a
+    // late finalize failure becoming an unhandled rejection after a lost race.
+    const finished = archive.finalize().then(() => 'done' as const, () => 'error' as const)
+    const outcome = await Promise.race([finished, resClosed.then(() => 'closed' as const)])
+    if (outcome !== 'done') {
+      if (outcome === 'closed') log(`Zip download for share ${share.key} cancelled by client`)
+      // 'error' was already logged by the archiver error listener
+      archive.abort()
+      res.destroy()
+    }
   } finally {
     await fs.rm(options.stagingDir, { recursive: true, force: true }).catch(() => { /* best effort */ })
   }
@@ -123,24 +148,25 @@ export async function downloadAssets (res: Response, share: SharedLink, assets: 
  * concurrently. Returns the promise array in input order so the consumer can
  * archive in order.
  */
-function stageAssetsToDisk (assets: Asset[], options: StagingOptions, abortFlag: AbortFlag): Promise<StageOutcome>[] {
+function stageAssetsToDisk (assets: Asset[], options: StagingOptions, signal: AbortSignal): Promise<StageOutcome>[] {
   const limit = createLimiter(options.concurrency)
-  return assets.map((asset, index) => limit(() => stageOne(asset, index, options, abortFlag)))
+  return assets.map((asset, index) => limit(() => stageOne(asset, index, options, signal)))
 }
 
 /**
  * Walk the staged assets in input order, adding each to the archive as soon
- * as it lands. The first failure sets the abort flag (so unstarted stages
- * bail out) and is returned to the caller. We wait for in-flight stages to
- * settle before returning so the staging dir is safe to delete.
+ * as it lands. The first failure aborts the download signal (so unstarted
+ * stages bail out and in-flight fetches are cancelled) and is returned to the
+ * caller. We wait for in-flight stages to settle before returning so the
+ * staging dir is safe to delete.
  */
-async function archiveStaged (archive: Archiver, stages: Promise<StageOutcome>[], abortFlag: AbortFlag): Promise<Failure | null> {
+async function archiveStaged (archive: Archiver, stages: Promise<StageOutcome>[], controller: AbortController): Promise<Failure | null> {
   let failure: Failure | null = null
   for (const stage of stages) {
     const result = await stage
     if (result === null) break // aborted by an earlier stage
     if ('failure' in result) {
-      abortFlag.aborted = true
+      controller.abort()
       failure = result.failure
       break
     }
@@ -151,7 +177,7 @@ async function archiveStaged (archive: Archiver, stages: Promise<StageOutcome>[]
   // After abort, wait for any in-flight stages to settle before we delete
   // the staging dir. stageOne never rejects (errors become failure objects),
   // so a plain Promise.all is safe.
-  if (abortFlag.aborted) await Promise.all(stages)
+  if (controller.signal.aborted) await Promise.all(stages)
   return failure
 }
 
@@ -173,14 +199,14 @@ function abortDownload (archive: Archiver, res: Response, share: SharedLink, fai
  * Returns the staged asset on success, a wrapped Failure on error, or null
  * if we observed the abort flag and bailed without doing work.
  */
-async function stageOne (asset: Asset, index: number, options: StagingOptions, abortFlag: AbortFlag): Promise<StageOutcome> {
-  if (abortFlag.aborted) return null
+async function stageOne (asset: Asset, index: number, options: StagingOptions, signal: AbortSignal): Promise<StageOutcome> {
+  if (signal.aborted) return null
 
   const endpoint = resolveImageEndpoint(ImageSize.original, asset)
   const url = assetFetchUrl(asset, endpoint.subpath, endpoint.sizeQueryParam)
   const reqAuthHeaders = await authHeadersForAsset(asset)
 
-  const fetched = await fetchHeadersWithRetry(url, reqAuthHeaders, options.maxAttempts, options.headerTimeoutMs, abortFlag, asset)
+  const fetched = await fetchHeadersWithRetry(url, reqAuthHeaders, options.maxAttempts, options.headerTimeoutMs, signal, asset)
   if (fetched === null) return null
   if ('failure' in fetched) return { failure: { ...fetched.failure, asset, url } }
 
@@ -250,23 +276,27 @@ type HeaderFetchOutcome =
  * streaming, the body read errors out. We clear the header timer as soon
  * as we have a response; downstream the idle-timeout transform guards
  * against stalled bodies.
+ *
+ * The download-wide `signal` is combined into the fetch signal so that an
+ * aborted download (asset failure or client disconnect) cancels the header
+ * wait and any in-flight body stream immediately.
  */
 async function fetchHeadersWithRetry (
   url: string,
   headers: Record<string, string>,
   maxAttempts: number,
   headerTimeoutMs: number,
-  abortFlag: AbortFlag,
+  signal: AbortSignal,
   asset: Asset
 ): Promise<HeaderFetchOutcome> {
   let lastStatus: number | undefined
   let lastError: unknown
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-    if (abortFlag.aborted) return null
+    if (signal.aborted) return null
     const controller = new AbortController()
     const headerTimer = setTimeout(() => controller.abort(new Error(`No response headers within ${headerTimeoutMs}ms`)), headerTimeoutMs)
     try {
-      const data = await fetch(url, { signal: controller.signal, headers })
+      const data = await fetch(url, { signal: AbortSignal.any([controller.signal, signal]), headers })
       clearTimeout(headerTimer)
       if (data.ok) return { response: data }
       await data.body?.cancel()
@@ -277,7 +307,7 @@ async function fetchHeadersWithRetry (
       lastError = e
       lastStatus = undefined
     }
-    if (attempt < maxAttempts) {
+    if (attempt < maxAttempts && !signal.aborted) {
       const reason = lastStatus !== undefined
         ? `HTTP ${lastStatus}`
         : (lastError instanceof Error ? lastError.message : String(lastError))
