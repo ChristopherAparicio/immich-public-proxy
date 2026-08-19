@@ -1,6 +1,6 @@
 import { assetFetchUrl, authHeadersForAsset } from '../immich'
 import { Response } from 'express-serve-static-core'
-import { Asset, ImageSize, SharedLink } from '../types'
+import { Asset, SharedLink } from '../types'
 import { getNumericConfigOption } from '../config/access'
 import { log } from '../utils/log'
 import archiver, { Archiver } from 'archiver'
@@ -10,7 +10,7 @@ import { pipeline } from 'stream/promises'
 import { promises as fs, createWriteStream } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
-import { resolveImageEndpoint, ImageEndpoint } from '../gallery/sizing'
+import { resolveDownloadEndpoint, ImageEndpoint } from '../gallery/sizing'
 import { title } from '../share'
 import { getFilename } from '../gallery/filename'
 import { createLimiter } from '../utils/limiter'
@@ -48,7 +48,7 @@ export async function sweepStaleStagingDirs (maxAgeMs = 60 * 60 * 1000) {
   }
 }
 
-type StagedAsset = { tempfile: string, asset: Asset, endpoint: ImageEndpoint }
+type StagedAsset = { tempfile: string, asset: Asset, endpoint: ImageEndpoint, servedMime?: string }
 type Failure = { asset: Asset, url: string, status?: number, error?: unknown }
 type StageOutcome = StagedAsset | { failure: Failure } | null
 
@@ -114,7 +114,7 @@ export async function downloadAssets (res: Response, share: SharedLink, assets: 
   })
 
   try {
-    const stages = stageAssetsToDisk(assets, options, controller.signal)
+    const stages = stageAssetsToDisk(share, assets, options, controller.signal)
     const failure = await archiveStaged(archive, stages, controller)
     if (clientGone) {
       log(`Zip download for share ${share.key} cancelled by client`)
@@ -148,9 +148,9 @@ export async function downloadAssets (res: Response, share: SharedLink, assets: 
  * concurrently. Returns the promise array in input order so the consumer can
  * archive in order.
  */
-function stageAssetsToDisk (assets: Asset[], options: StagingOptions, signal: AbortSignal): Promise<StageOutcome>[] {
+function stageAssetsToDisk (share: SharedLink, assets: Asset[], options: StagingOptions, signal: AbortSignal): Promise<StageOutcome>[] {
   const limit = createLimiter(options.concurrency)
-  return assets.map((asset, index) => limit(() => stageOne(asset, index, options, signal)))
+  return assets.map((asset, index) => limit(() => stageOne(share, asset, index, options, signal)))
 }
 
 /**
@@ -171,7 +171,7 @@ async function archiveStaged (archive: Archiver, stages: Promise<StageOutcome>[]
       break
     }
     // archive.file queues the entry; archiver lazily opens and reads it.
-    archive.file(result.tempfile, { name: getFilename(result.asset, result.endpoint.servedSize) })
+    archive.file(result.tempfile, { name: getFilename(result.asset, result.endpoint.servedSize, result.servedMime) })
   }
 
   // After abort, wait for any in-flight stages to settle before we delete
@@ -199,10 +199,10 @@ function abortDownload (archive: Archiver, res: Response, share: SharedLink, fai
  * Returns the staged asset on success, a wrapped Failure on error, or null
  * if we observed the abort flag and bailed without doing work.
  */
-async function stageOne (asset: Asset, index: number, options: StagingOptions, signal: AbortSignal): Promise<StageOutcome> {
+async function stageOne (share: SharedLink, asset: Asset, index: number, options: StagingOptions, signal: AbortSignal): Promise<StageOutcome> {
   if (signal.aborted) return null
 
-  const endpoint = resolveImageEndpoint(ImageSize.original, asset)
+  const endpoint = resolveDownloadEndpoint(asset, share.allowDownload !== false)
   const url = assetFetchUrl(asset, endpoint.subpath, endpoint.sizeQueryParam)
   const reqAuthHeaders = await authHeadersForAsset(asset)
 
@@ -216,12 +216,18 @@ async function stageOne (asset: Asset, index: number, options: StagingOptions, s
   // so recover them from the headers we already fetched - no extra calls.
   const stagedAsset = asset.originalFileName ? asset : enrichFromHeaders(asset, fetched.response)
 
+  // Playback-fallback downloads serve Immich's transcode; carry the response
+  // content-type so the zip entry's extension matches the actual bytes.
+  const servedMime = endpoint.subpath === '/video/playback'
+    ? (fetched.response.headers.get('content-type') || '').split(';')[0].trim() || undefined
+    : undefined
+
   // Use the array index in the path so we never collide on duplicate IDs.
   const tempfile = join(options.stagingDir, `${index}-${asset.id}`)
   const streamed = await streamBodyToTempFile(fetched.response, tempfile, options.idleTimeoutMs)
   if ('failure' in streamed) return { failure: { asset, url, error: streamed.failure } }
 
-  return { tempfile, asset: stagedAsset, endpoint }
+  return { tempfile, asset: stagedAsset, endpoint, servedMime }
 }
 
 /**
