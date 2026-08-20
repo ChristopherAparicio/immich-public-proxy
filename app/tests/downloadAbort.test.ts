@@ -35,6 +35,33 @@ async function stagingDirs (): Promise<string[]> {
   return entries.filter(name => name.startsWith('ipp-zip-'))
 }
 
+/**
+ * Open fds pointing at deleted staging tempfiles. An aborted archiver used to
+ * keep the in-flight entry's read stream open forever; on tmpfs that pins the
+ * deleted file's space (issue #284). Linux-only introspection - returns []
+ * elsewhere, making the assertions no-ops.
+ */
+async function deletedStagingFds (): Promise<string[]> {
+  const fds = await fs.readdir('/proc/self/fd').catch(() => [] as string[])
+  const leaked: string[] = []
+  for (const fd of fds) {
+    const target = await fs.readlink('/proc/self/fd/' + fd).catch(() => '')
+    if (target.includes('ipp-zip-') && target.includes('(deleted)')) leaked.push(target)
+  }
+  return leaked
+}
+
+/** Wait for archiver's post-abort drain to release fds, then return leftovers. */
+async function settledDeletedStagingFds (timeoutMs = 3000): Promise<string[]> {
+  const deadline = Date.now() + timeoutMs
+  let leaked = await deletedStagingFds()
+  while (leaked.length > 0 && Date.now() < deadline) {
+    await new Promise(resolve => setTimeout(resolve, 100))
+    leaked = await deletedStagingFds()
+  }
+  return leaked
+}
+
 function makeAsset (id: string): Asset {
   return {
     id,
@@ -130,6 +157,7 @@ describe('downloadAssets abort handling', () => {
     expect(signals.length).toBeGreaterThan(0)
     expect(signals.every(s => s.aborted)).toBe(true)
     expect(await stagingDirs()).toEqual([])
+    expect(await settledDeletedStagingFds()).toEqual([])
   }, 10_000)
 
   it('resolves and cleans up when the client aborts while the zip is streaming', async () => {
@@ -148,6 +176,9 @@ describe('downloadAssets abort handling', () => {
     }
     await downloadAssets(asResponse(res), share, [makeAsset('a1'), makeAsset('a2')])
     expect(await stagingDirs()).toEqual([])
+    // The regression from issue #284's follow-up: the staging dir was removed
+    // but archiver still held an open fd on a deleted tempfile.
+    expect(await settledDeletedStagingFds()).toEqual([])
   }, 10_000)
 
   it('cleans up and destroys the response when an upstream fetch keeps failing', async () => {
@@ -156,5 +187,6 @@ describe('downloadAssets abort handling', () => {
     await downloadAssets(asResponse(res), share, [makeAsset('a1')])
     expect(res.destroyed).toBe(true)
     expect(await stagingDirs()).toEqual([])
+    expect(await settledDeletedStagingFds()).toEqual([])
   }, 10_000)
 })

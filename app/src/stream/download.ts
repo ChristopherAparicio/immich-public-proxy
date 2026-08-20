@@ -118,7 +118,7 @@ export async function downloadAssets (res: Response, share: SharedLink, assets: 
     const failure = await archiveStaged(archive, stages, controller)
     if (clientGone) {
       log(`Zip download for share ${share.key} cancelled by client`)
-      archive.abort()
+      teardownArchive(archive, res)
       return
     }
     if (failure) {
@@ -135,8 +135,7 @@ export async function downloadAssets (res: Response, share: SharedLink, assets: 
     if (outcome !== 'done') {
       if (outcome === 'closed') log(`Zip download for share ${share.key} cancelled by client`)
       // 'error' was already logged by the archiver error listener
-      archive.abort()
-      res.destroy()
+      teardownArchive(archive, res)
     }
   } finally {
     await fs.rm(options.stagingDir, { recursive: true, force: true }).catch(() => { /* best effort */ })
@@ -186,8 +185,19 @@ function abortDownload (archive: Archiver, res: Response, share: SharedLink, fai
     ? `HTTP ${failure.status}`
     : (failure.error instanceof Error ? failure.error.message : String(failure.error))
   log(`Aborting zip download for share ${share.key}: failed to fetch asset ${failure.asset.id} from ${failure.url} (${detail})`)
+  teardownArchive(archive, res)
+}
+
+/**
+ * Tear down an aborted archive so it releases its resources. `abort()` alone
+ * is not enough; it kills the queue but leaves any in-flight entry paused,
+ * holding an open read fd on its tempfile forever #284
+ */
+function teardownArchive (archive: Archiver, res: Response) {
   archive.abort()
+  archive.unpipe(res)
   res.destroy()
+  archive.resume()
 }
 
 /**
