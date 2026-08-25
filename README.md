@@ -95,9 +95,14 @@ run into video playback issues. See [Troubleshooting](#troubleshooting) for more
 
 #### Running alongside Immich on a single domain
 
-Because all IPP paths are under `/share/...`, you can run Immich Public Proxy and Immich on the same domain.
+Because all IPP paths are under `/share/...` and `/s/...`, you can run Immich Public Proxy and Immich on the same domain.
 
 See the instructions here: [Running on a single domain](./docs/running-on-single-domain.md).
+
+#### Redirecting your root domain to a share
+
+Want `photos.yourdomain.net` to open a specific album instead of the IPP landing page? You can do this with your
+reverse proxy - see [Redirecting your root domain to a share](./docs/redirect-root-to-share.md).
 
 ### Install with Kubernetes
 
@@ -121,6 +126,7 @@ https://your-proxy-url.com/share/ffSw63qnIYMtpmg0RNvOui0Dpio7BbxsObjvH8YZaobIjIA
 ```
 
 The part after `/share/` is Immich's shared link public ID (called the `key` [in the docs](https://immich.app/docs/api/get-my-shared-link)).
+For shared links with a named slug, the link will use the slug instead, e.g. `https://your-proxy-url.com/s/my-album`.
 
 **Immich Public Proxy** takes that key and makes an API call to your Immich instance over your local network, to ask what
 photos or videos are shared in that share URL.
