@@ -154,9 +154,9 @@ however my goal with this project is to keep it as lean as possible.
 Due to the sensitivity of data contained within Immich, this project optimises for auditability: the code 
 stays small enough that someone with coding experience can review it for security-relevant behavior.
 
-The most basic rule for this project is that it has **read-only** access to Immich.
-
-Things that will not be considered for this project are:
+The most basic rule for this project is that it has **read-only** access to Immich. Things that will not be considered for this project are:
 
 - Anything that modifies Immich or its files in any way. If it requires an API key or privileged accesss, it won't be considered as a new feature.
 - Uploading photos (see above).
+
+The second rule is that, as above, "IPP is stateless and does not know anything about your Immich instance." Anything that would require storing a share key (i.e. the code which gives you access to a share) is unlikely to be added.
