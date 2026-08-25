@@ -159,4 +159,4 @@ The most basic rule for this project is that it has **read-only** access to Immi
 - Anything that modifies Immich or its files in any way. If it requires an API key or privileged accesss, it won't be considered as a new feature.
 - Uploading photos (see above).
 
-The second rule is that, as above, "IPP is stateless and does not know anything about your Immich instance." Anything that would require storing a share key (i.e. the code which gives you access to a share) is unlikely to be added.
+The second rule is that "IPP is stateless and does not know anything about your Immich instance". Anything that would require storing a share key (i.e. the code which gives you access to a share) is unlikely to be added.
