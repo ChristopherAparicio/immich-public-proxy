@@ -1,0 +1,108 @@
+name: Upstream watch
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '17 5 * * 2'
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: upstream-watch
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout maintained branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Compare with upstream and maintain update issue
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          marker='<!-- immich-share-upstream-watch -->'
+          config='.github/upstream.json'
+          upstream_repo=$(jq -er '.repository' "$config")
+          base_revision=$(jq -er '.revision' "$config")
+          base_tag=$(jq -er '.releaseTag' "$config")
+
+          [[ "$upstream_repo" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]
+          [[ "$base_revision" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$base_tag" =~ ^[A-Za-z0-9._+-]{1,64}$ ]]
+
+          default_branch=$(gh api "repos/${upstream_repo}" --jq '.default_branch')
+          [[ "$default_branch" =~ ^[A-Za-z0-9._/-]{1,128}$ ]]
+          latest_revision=$(gh api "repos/${upstream_repo}/commits/${default_branch}" --jq '.sha')
+          latest_tag=$(gh api "repos/${upstream_repo}/releases/latest" --jq '.tag_name')
+
+          [[ "$latest_revision" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$latest_tag" =~ ^[A-Za-z0-9._+-]{1,64}$ ]]
+
+          issue_number=$(gh api "repos/${GITHUB_REPOSITORY}/issues?state=open&labels=upstream-update&per_page=100" \
+            --jq "[.[] | select((has(\"pull_request\") | not) and ((.body // \"\") | contains(\"${marker}\")))] | first | .number // empty")
+
+          if [[ "$latest_revision" == "$base_revision" && "$latest_tag" == "$base_tag" ]]; then
+            if [[ -n "$issue_number" ]]; then
+              gh issue close "$issue_number" --repo "$GITHUB_REPOSITORY" \
+                --comment 'The tracked upstream revision and release now match. Closing automatically.'
+            fi
+            printf '### Upstream watch\n\nNo upstream update detected.\n' >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          gh label create upstream-update --repo "$GITHUB_REPOSITORY" --force \
+            --color '1D76DB' --description 'A newer upstream release or commit is available'
+
+          issue_body="${RUNNER_TEMP}/upstream-update.md"
+          cat > "$issue_body" <<EOF
+          ${marker}
+          A newer upstream state is available. This issue is maintained automatically;
+          it does **not** merge, tag, publish, or deploy anything.
+
+          | Source | Fork base | Latest upstream |
+          | --- | --- | --- |
+          | Release | \`${base_tag}\` | \`${latest_tag}\` |
+          | \`${default_branch}\` revision | \`${base_revision}\` | \`${latest_revision}\` |
+
+          [Compare revisions](https://github.com/${upstream_repo}/compare/${base_revision}...${latest_revision})
+
+          Before updating the fork:
+
+          - [ ] Review the upstream release notes and revision diff.
+          - [ ] Create a dedicated update branch from the current fork release.
+          - [ ] Merge the selected upstream tag or commit without hiding upstream history.
+          - [ ] Review conflicts in queueing, downloads, sessions, CSRF, and URL handling.
+          - [ ] Update \`.github/upstream.json\` only after selecting the validated base.
+          - [ ] Pass CI, CodeQL, dependency audits, container scanning, and the external ZIP E2E suite.
+          - [ ] Test a non-public staging share before tagging a new fork release.
+          - [ ] Pin the resulting GHCR digest in the companion \`immich-share\` deployment.
+          EOF
+
+          if [[ -n "$issue_number" ]]; then
+            gh issue edit "$issue_number" --repo "$GITHUB_REPOSITORY" \
+              --title 'Upstream update available' --body-file "$issue_body" --add-label upstream-update
+            action='updated'
+          else
+            issue_url=$(gh issue create --repo "$GITHUB_REPOSITORY" \
+              --title 'Upstream update available' --body-file "$issue_body" --label upstream-update)
+            issue_number=${issue_url##*/}
+            action='opened'
+          fi
+
+          {
+            printf '### Upstream watch\n\n'
+            printf 'Issue #%s %s.\n\n' "$issue_number" "$action"
+            printf -- "- Base revision: \`%s\`\n" "$base_revision"
+            printf -- "- Latest revision: \`%s\`\n" "$latest_revision"
+            printf -- "- Base release: \`%s\`\n" "$base_tag"
+            printf -- "- Latest release: \`%s\`\n" "$latest_tag"
+          } >> "$GITHUB_STEP_SUMMARY"

@@ -12,6 +12,12 @@ The first fork release is based on upstream revision
 validated production image. Release tags use the form
 `v<upstream-version>-immich-share.<revision>`.
 
+`.github/upstream.json` is the machine-readable source of truth for the
+selected upstream revision and release tag. The weekly `Upstream watch`
+workflow compares that file with upstream `main` and the latest upstream
+release. It opens or updates one maintenance issue when either changes; it
+never merges code, creates a tag, publishes an image, or deploys anything.
+
 ## Fork delta
 
 - One active ZIP lifecycle with a bounded, process-local FIFO.
@@ -33,10 +39,11 @@ Updates are never merged directly into a production release.
 2. Review upstream release notes, dependency changes and security fixes.
 3. Merge the selected upstream tag or commit without squashing its history.
 4. Resolve conflicts in small, auditable commits; do not patch generated files.
-5. Run `npm ci`, `npm run build`, `npm test`, the container smoke test and the
+5. Update `.github/upstream.json` to the selected revision and release tag.
+6. Run `npm ci`, `npm run build`, `npm test`, the container smoke test and the
    immich-share end-to-end ZIP suite.
-6. Deploy to a non-public staging share and verify 200, 206, 413, 429 and 507.
-7. Tag only after review and preserve the prior immutable image digest for rollback.
+7. Deploy to a non-public staging share and verify 200, 206, 403, 413, 429 and 507.
+8. Tag only after review and preserve the prior immutable image digest for rollback.
 
 Automation may open an update issue or pull request, but it must never deploy an
 upstream change automatically.
