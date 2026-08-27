@@ -37,7 +37,7 @@
     "@types/node": "^22",
     "@typescript-eslint/eslint-plugin": "^7",
     "@typescript-eslint/parser": "^7",
-    "concurrently": "^10.0.3",
+    "concurrently": "^10.0.5",
     "eslint": "^8.57.0",
     "eslint-config-standard": "^17.1.0",
     "photoswipe": "^5.4.4",
