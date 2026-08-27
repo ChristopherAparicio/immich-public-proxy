@@ -27,3 +27,17 @@ TLS, isolate Immich from the public network, restrict the proxy's upstream
 network path, configure resource limits and keep share passwords and expiries
 appropriate for their threat model. The companion `immich-share` repository
 documents the hardened NAS, tunnel and VPS architecture.
+
+## Browser request integrity
+
+Every state-changing browser endpoint requires both a host-only CSRF cookie and
+the same value in the `X-IPP-CSRF-Token` header. The token contains a random
+nonce authenticated with a process-local HMAC secret, and comparison is
+constant-time. This prevents a sibling subdomain from manufacturing a valid
+double-submit token. Fetch Metadata must also identify the request as
+same-origin (or a direct browser navigation context).
+
+The CSRF token is deliberately kept out of cached gallery HTML. Its cookie is
+`SameSite=Strict`, becomes `Secure` in production, and is replaced after eight
+hours or whenever its HMAC is invalid. Regression tests cover matching,
+missing, forged and cross-site token cases.
