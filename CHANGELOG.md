@@ -3,6 +3,19 @@
 All notable fork-specific changes are documented here. Upstream history and
 release notes remain available in the upstream repository.
 
+## 3.2.1-immich-share.2 — 2026-08-27
+
+### Security
+
+- Added HMAC-authenticated double-submit CSRF protection and Fetch Metadata
+  validation to every state-changing browser endpoint.
+- Restricted client-generated ZIP URLs to validated same-origin paths and
+  opaque job identifiers.
+- Rebuilt compatibility redirects from fixed path prefixes and encoded route
+  parameters instead of redirecting to request-controlled URLs.
+- Added CSRF regression tests and resolved all CodeQL alerts open on the first
+  fork release.
+
 ## 3.2.1-immich-share.1 — 2026-08-27
 
 Based on upstream revision `7c8df2f2b53cf938454ec2a7d2ce9c974a0a095e`.

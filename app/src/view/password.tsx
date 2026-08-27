@@ -4,15 +4,27 @@ interface PasswordProps {
 }
 
 const submitScript = `
+  function csrfToken () {
+    const prefix = 'ipp-csrf='
+    const part = document.cookie.split(';').map(value => value.trim()).find(value => value.startsWith(prefix))
+    if (!part) return ''
+    try { return decodeURIComponent(part.slice(prefix.length)) } catch (e) { return '' }
+  }
+
   async function submitForm (formElement) {
     const formData = new FormData(formElement)
     try {
       const res = await fetch('/share/unlock', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          'X-IPP-CSRF-Token': csrfToken()
+        },
         body: JSON.stringify(Object.fromEntries(formData.entries()))
       })
       if (res.status === 200) {
+        window.location.reload()
+      } else if (res.status === 403) {
         window.location.reload()
       }
     } catch (e) { }

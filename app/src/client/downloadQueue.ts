@@ -17,6 +17,28 @@ let pendingAssets: string[] | undefined
 
 const byId = <T extends HTMLElement>(id: string) => document.getElementById(id) as T | null
 
+function csrfToken (): string {
+  const prefix = 'ipp-csrf='
+  const part = document.cookie.split(';').map(value => value.trim()).find(value => value.startsWith(prefix))
+  if (!part) return ''
+  try { return decodeURIComponent(part.slice(prefix.length)) } catch { return '' }
+}
+
+function validJobId (value: string): boolean {
+  return /^[A-Za-z0-9_-]{24}$/.test(value)
+}
+
+function safeDownloadPath (path?: string): string {
+  if (!path) return ''
+  try {
+    const url = new URL(path, window.location.origin)
+    if (url.origin !== window.location.origin || url.search || url.hash) return ''
+    return /^\/(?:share|s)\/[A-Za-z0-9_-]{1,128}\/download$/.test(url.pathname) ? url.pathname : ''
+  } catch {
+    return ''
+  }
+}
+
 function storageKey () { return 'ipp-zip-job:' + downloadPath }
 
 function formatBytes (bytes?: number): string {
@@ -162,9 +184,16 @@ async function prepare () {
     const response = await fetch(`${downloadPath}/prepare`, {
       method: 'POST',
       credentials: 'same-origin',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        'X-IPP-CSRF-Token': csrfToken()
+      },
       body: JSON.stringify(pendingAssets ? { assets: pendingAssets } : {})
     })
+    if (response.status === 403) {
+      window.location.reload()
+      return
+    }
     if (response.status === 429) {
       showLocalError('The download queue is full. Please try again later.')
       return
@@ -195,7 +224,8 @@ async function leaveQueue () {
   try {
     await fetch(`${downloadPath}/jobs/${id}`, {
       method: 'DELETE',
-      credentials: 'same-origin'
+      credentials: 'same-origin',
+      headers: { 'X-IPP-CSRF-Token': csrfToken() }
     })
   } finally {
     reset()
@@ -212,8 +242,12 @@ function downloadReadyZip () {
     return
   }
   if (currentJob.state !== 'ready') return
+  if (!validJobId(currentJob.id)) {
+    reset()
+    return
+  }
   const link = document.createElement('a')
-  link.href = `${downloadPath}/jobs/${currentJob.id}/file`
+  link.href = `${downloadPath}/jobs/${encodeURIComponent(currentJob.id)}/file`
   link.download = ''
   document.body.appendChild(link)
   link.click()
@@ -233,8 +267,8 @@ export function startZipDownload (assets?: string[]) {
 }
 
 export function setupZipDownload (path?: string) {
-  if (!path) return
-  downloadPath = path
+  downloadPath = safeDownloadPath(path)
+  if (!downloadPath) return
   const button = byId<HTMLAnchorElement>('download-all')
   const dialog = byId<HTMLDialogElement>('zip-dialog')
   button?.addEventListener('click', event => {
@@ -246,7 +280,7 @@ export function setupZipDownload (path?: string) {
   byId<HTMLButtonElement>('zip-action')?.addEventListener('click', downloadReadyZip)
 
   const saved = sessionStorage.getItem(storageKey())
-  if (saved) {
+  if (saved && validJobId(saved)) {
     currentJob = { id: saved, state: 'queued' }
     poll()
   }

@@ -32,6 +32,7 @@ import { ASSET_VERSION } from './version'
 import { h } from 'preact'
 import { renderPage } from './view/render'
 import { Home } from './view/home'
+import { ensureCsrfCookie, requireCsrf } from './csrf'
 
 // Extend the Request type with a `password` property
 declare module 'express-serve-static-core' {
@@ -51,6 +52,7 @@ app.use(cookieSession({
   sameSite: 'lax',
   secret: crypto.randomBytes(32).toString('base64url')
 }))
+app.use(ensureCsrfCookie)
 // For parsing the password unlock form and POSTed JSON payloads
 app.use(express.json())
 // For parsing the selective-download form POST (form-encoded body)
@@ -179,7 +181,7 @@ function selectedZipAssets (req: Request, share: SharedLink): Asset[] | null {
   return selected.length === ids.size ? selected : null
 }
 
-app.post('/:shareType(share|s)/:key/download/prepare', decodeCookie, asyncHandler(async (req, res) => {
+app.post('/:shareType(share|s)/:key/download/prepare', requireCsrf, decodeCookie, asyncHandler(async (req, res) => {
   res.set('Cache-Control', 'private, no-store')
   const keyType = getKeyTypeFromShare(req.params.shareType)
   const resolved = await resolveShare(req, keyType)
@@ -230,7 +232,7 @@ app.get('/:shareType(share|s)/:key/download/jobs/:jobId', decodeCookie, asyncHan
   res.json(status)
 }))
 
-app.delete('/:shareType(share|s)/:key/download/jobs/:jobId', decodeCookie, asyncHandler(async (req, res) => {
+app.delete('/:shareType(share|s)/:key/download/jobs/:jobId', requireCsrf, decodeCookie, asyncHandler(async (req, res) => {
   res.set('Cache-Control', 'private, no-store')
   if (!validZipJobId(req.params.jobId)) {
     res.status(404).send()
@@ -303,7 +305,7 @@ app.get('/:shareType(share|s)/:key/:mode(download)?', decodeCookie, asyncHandler
  * managing user session data. The data is provided to the server by the
  * user's browser in its encrypted state.
  */
-app.post('/share/unlock', asyncHandler(async (req, res) => {
+app.post('/share/unlock', requireCsrf, asyncHandler(async (req, res) => {
   if (req.session && req.body.key) {
     req.session[req.body.key] = encrypt(JSON.stringify({
       password: req.body.password,
@@ -319,7 +321,7 @@ app.post('/share/unlock', asyncHandler(async (req, res) => {
  * Validates each ID against share.assets so the request can't pull anything
  * outside the share.
  */
-app.post('/:shareType(share|s)/:key/download', decodeCookie, asyncHandler(async (req, res) => {
+app.post('/:shareType(share|s)/:key/download', requireCsrf, decodeCookie, asyncHandler(async (req, res) => {
   if (!getConfigOption('ipp.allowLegacyDirectZipDownload', false)) {
     res.status(409).type('text/plain').send('Direct ZIP downloads are disabled; use the gallery download queue')
     return
@@ -363,7 +365,9 @@ app.post('/:shareType(share|s)/:key/download', decodeCookie, asyncHandler(async 
  * See https://github.com/alangrainger/immich-public-proxy/pull/205
  */
 app.post('/:shareType(share|s)/:key/:mode(download)?', (req, res) => {
-  res.redirect(303, req.originalUrl)
+  const prefix = req.params.shareType === 's' ? '/s/' : '/share/'
+  const suffix = req.params.mode === 'download' ? '/download' : ''
+  res.redirect(303, prefix + encodeURIComponent(req.params.key) + suffix)
 })
 
 /*
