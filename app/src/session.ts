@@ -1,5 +1,4 @@
 import type { Application } from 'express'
-import type { CookieSessionOptions } from 'cookie-session'
 
 /**
  * Install the signed browser session. Production IPP is reachable only through
@@ -16,7 +15,7 @@ export function configureTrustedProxy (
 export function sessionOptions (
   secret: string,
   production = process.env.NODE_ENV === 'production'
-): CookieSessionOptions {
+): CookieSessionInterfaces.CookieSessionOptions {
   return {
     name: 'session',
     httpOnly: true,
