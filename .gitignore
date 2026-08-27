@@ -10,7 +10,13 @@ app/public/js/
 *.pfx
 *.key
 *.secret
+*.mobileconfig
+*.p8
+*.age
+*.kdbx
 credentials.json
+.netrc
+.npmrc
 secrets/
 managed-shares.json
 id_rsa
