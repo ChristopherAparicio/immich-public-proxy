@@ -8,7 +8,7 @@ hero:
   actions:
     - theme: brand
       text: Live demo
-      link: https://demo.ipp.nz/s/demo-gallery
+      link: https://demo.ipp.nz/s/demo-gallery # Upstream base-gallery demo
       target: _self
     - theme: alt
       text: Getting started
@@ -27,4 +27,3 @@ features:
   - title: Managed entirely in Immich
     details: All sharing stays managed within Immich itself. Set IPP up once and you never need to touch it again.
 ---
-

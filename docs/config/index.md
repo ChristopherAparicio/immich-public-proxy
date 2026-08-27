@@ -1,7 +1,7 @@
 # Configuration
 
 > [!TIP]
-> You can see all of the configurable options by [looking at the default config.json](https://github.com/alangrainger/immich-public-proxy/blob/main/app/config.json). A description of each option is on the pages in this section.
+> You can see all configurable options in the fork's [default config.json](https://github.com/ChristopherAparicio/immich-public-proxy/blob/immich-share/app/config.json). A description of each option is on the pages in this section.
 
 All options live under `ipp.*`, grouped into:
 
@@ -21,7 +21,7 @@ There are two ways to supply custom config.
 
 ### Mount a file
 
-Recommended for anything non-trivial. Make a copy of [config.json](https://github.com/alangrainger/immich-public-proxy/blob/main/app/config.json) next to your `docker-compose.yml`, edit it, then add a volume:
+Recommended for anything non-trivial. Make a copy of [config.json](https://github.com/ChristopherAparicio/immich-public-proxy/blob/immich-share/app/config.json) next to your `docker-compose.yml`, edit it, then add a volume:
 
 ```yaml
     volumes:

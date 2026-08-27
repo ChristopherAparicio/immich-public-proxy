@@ -5,7 +5,7 @@
 
 ## Install with Docker / Podman
 
-1. Download the [docker-compose.yml](https://github.com/alangrainger/immich-public-proxy/blob/main/docker-compose.yml)
+1. Download the fork's hardened [docker-compose.yml](https://github.com/ChristopherAparicio/immich-public-proxy/blob/immich-share/docker-compose.yml)
    file.
 
 2. Update the value for `IMMICH_URL` in your docker-compose file to point to your local URL for Immich. **This should

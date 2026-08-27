@@ -51,7 +51,7 @@ service in `docker-compose.yml`:
 ```yaml
 services:
   immich-public-proxy:
-    image: alangrainger/immich-public-proxy:latest
+    image: ghcr.io/christopheraparicio/immich-public-proxy:3.2.1-immich-share.1
     # ...your existing config...
     sysctls:
       - net.ipv6.conf.all.disable_ipv6=1

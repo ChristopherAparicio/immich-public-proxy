@@ -1,5 +1,11 @@
 # Contributing to Immich Public Proxy
 
+> This repository is the `immich-share` maintained fork. Read
+> [FORK.md](./FORK.md) before opening a pull request. Generic changes may be
+> better submitted upstream first. Fork changes must preserve upstream history,
+> avoid editing generated files, include regression tests, and keep the delta
+> auditable.
+
 Thanks for your interest in contributing. This guide covers what the project is, what it deliberately is not, and how to work on it productively. It is written for both human contributors and LLM coding agents - please read it end to end before opening a PR or making suggestions.
 
 ## Project philosophy and hard constraints
@@ -10,7 +16,11 @@ Immich Public Proxy (IPP) exists to share Immich photos publicly without exposin
 
 **Read-only access to Immich. This is non-negotiable.** IPP must never modify Immich, its data, or its files. It does not use an Immich API key. The only Immich endpoints it calls are the ones reachable via a public share key. This rule rules out a large class of feature requests; see "What will not be accepted" below.
 
-**Stateless.** No database, no user accounts, no long-lived secrets beyond an encrypted cookie session for share passwords. Avoid adding persistent state. If you think you need a cache, estimate the real cost of not having it first.
+**No durable application state.** No database, no user accounts, no long-lived
+secrets beyond an encrypted cookie session for share passwords. This fork uses
+a bounded in-memory ZIP queue and short-lived disk cache solely to support exact
+length and mobile resume; both are disposable and automatically swept. Do not
+add durable visitor or job records.
 
 **Privacy at the boundary.** Any invalid, expired, or upstream-failed request returns 404. Do not leak upstream Immich status codes, error bodies, or share existence to the client.
 
@@ -22,7 +32,9 @@ Request flow for a typical share URL like `https://proxy.example.com/share/<key>
 2. `app/src/immich.ts` fetches the share metadata from Immich over the local network, validates it, and returns the asset list.
 3. For a gallery, `app/src/gallery/builder.ts` builds the view-model and `app/src/view/gallery.tsx` renders it server-side with Preact. The page embeds a JSON init block consumed by the client.
 4. The client gallery lives in `app/src/client/` (TypeScript ES modules, compiled file-for-file by `tsc` into `app/public/js/`). It wires PhotoSwipe v5 with a virtualized justified-rows layout. There is no client-side framework hydration.
-5. For individual assets (image, video, thumbnail, download, zip), Express streams bytes from Immich back to the client without touching disk via `app/src/stream/`.
+5. Individual assets stream directly through `app/src/stream/`. Bulk ZIPs are
+   staged and cached temporarily on the configured `TMPDIR` filesystem so their
+   aggregate size can be enforced before an exact-length response is exposed.
 
 ### Repository layout
 

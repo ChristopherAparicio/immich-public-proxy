@@ -38,8 +38,8 @@ server:
       containers:
         main:
           image:
-            repository: alangrainger/immich-public-proxy
-            tag: 3.2.0
+            repository: ghcr.io/christopheraparicio/immich-public-proxy
+            tag: 3.2.1-immich-share.1
             pullPolicy: IfNotPresent
           env:
             IMMICH_URL: https://your-immich-url.com // You could also reference the service here
@@ -86,5 +86,3 @@ server:
                 identifier: immich-public-proxy
 ...
 ```
-
-

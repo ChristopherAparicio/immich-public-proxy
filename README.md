@@ -1,21 +1,42 @@
-# Immich Public Proxy
+# Immich Public Proxy — immich-share maintained fork
+
+> [!IMPORTANT]
+> This is a security-focused fork of
+> [alangrainger/immich-public-proxy](https://github.com/alangrainger/immich-public-proxy),
+> maintained for the
+> [immich-share](https://github.com/ChristopherAparicio/immich-share)
+> deployment architecture. It is not an official Immich project. The fork
+> preserves the upstream AGPL-3.0 license and history.
 
 <p align="center" width="100%">
 <img src="docs/public/ipp.svg" width="180" height="180">
 </p>
 
 <p align="center" width="100%">
-<a href="https://hub.docker.com/r/alangrainger/immich-public-proxy/tags">
-    <img alt="Docker pulls" src="https://badgen.net/docker/pulls/alangrainger/immich-public-proxy?icon=docker&label=docker%20pulls&color=green&scale=1.1"></a>
-<a href="https://github.com/alangrainger/immich-public-proxy/releases/latest">
-    <img alt="Latest release" src="https://badgen.net/github/tag/alangrainger/immich-public-proxy?scale=1.1&label=release"></a>
-<a href="https://demo.ipp.nz/s/demo-gallery"><img alt="Open demo gallery" src="https://badgen.net/static/↗🖼️/live%20demo/green?scale=1.1"></a>
+<a href="https://github.com/ChristopherAparicio/immich-public-proxy/actions/workflows/ci.yaml">
+    <img alt="CI" src="https://github.com/ChristopherAparicio/immich-public-proxy/actions/workflows/ci.yaml/badge.svg"></a>
+<a href="https://github.com/ChristopherAparicio/immich-public-proxy/security/policy">
+    <img alt="Security policy" src="https://img.shields.io/badge/security-policy-blue"></a>
+<a href="https://www.gnu.org/licenses/agpl-3.0.en.html">
+    <img alt="AGPL-3.0" src="https://img.shields.io/badge/license-AGPL--3.0-green"></a>
 </p>
 
 Share your Immich photos and albums in a safe way without exposing your Immich instance to the public.
 
-👉 See a [Live demo gallery](https://demo.ipp.nz/s/demo-gallery)
-serving straight out of my own Immich instance.
+This fork adds a bounded FIFO for bulk downloads, an explicit mobile-friendly
+preparation dialog, immutable ZIP caching with exact `Content-Length`, HTTP
+Range resume, aggregate-size and disk-reserve checks, and fail-closed tests.
+Direct legacy ZIP endpoints are disabled by default so public visitors cannot
+bypass the queue. See [FORK.md](./FORK.md) for the complete delta and upstream
+update policy and [the ZIP architecture](./docs/zip-downloads.md) for lifecycle,
+resource and threat-model details.
+
+> [!WARNING]
+> Run exactly one application replica. Queue jobs and session signing are
+> process-local; horizontal scaling is not supported by this release.
+
+The upstream project provides a [live demo gallery](https://demo.ipp.nz/s/demo-gallery).
+It demonstrates the base gallery but not this fork's queued ZIP workflow.
 
 Setup takes less than a minute, and you never need to touch it again as all of your sharing stays managed within Immich.
 
@@ -29,7 +50,7 @@ Setup takes less than a minute, and you never need to touch it again as all of y
 - [Installation](#installation)
 - [How to use it](#how-to-use-it)
 - [How it works](#how-it-works)
-- [Configuration](https://docs.ipp.nz/config/)
+- [Configuration](./docs/config/index.md)
 - [Troubleshooting](#troubleshooting)
 - [Feature requests](#feature-requests)
 
@@ -67,7 +88,9 @@ Here is an example setup for [securing Immich behind mTLS](./docs/securing-immic
 
 ### Install with Docker / Podman
 
-1. Download the [docker-compose.yml](https://github.com/alangrainger/immich-public-proxy/blob/main/docker-compose.yml) file.
+1. Download this fork's hardened
+   [docker-compose.yml](https://github.com/ChristopherAparicio/immich-public-proxy/blob/immich-share/docker-compose.yml)
+   and copy `.env.example` to `.env`.
 
 2. Update the value for `IMMICH_URL` in your docker-compose file to point to your local URL for Immich. This should not be a public URL.
 
@@ -134,15 +157,15 @@ All incoming data is validated and sanitised, and anything unexpected is simply 
 
 ## Configuration
 
-See **[the configuration docs](https://docs.ipp.nz/config/)** for the full reference.
+See **[the configuration docs](./docs/config/index.md)** for the full reference.
 
 ## Troubleshooting
 
-See the [troubleshooting docs](https://docs.ipp.nz/troubleshooting).
+See the [troubleshooting docs](./docs/troubleshooting.md).
 
 ## Feature requests
 
-You can [add feature requests here](https://github.com/alangrainger/immich-public-proxy/discussions/categories/feature-requests?discussions_q=is%3Aopen+category%3A%22Feature+Requests%22+sort%3Atop),
+You can [open a feature request here](https://github.com/ChristopherAparicio/immich-public-proxy/issues/new/choose),
 however my goal with this project is to keep it as lean as possible.
 
 Due to the sensitivity of data contained within Immich, this project optimises for auditability: the code 
