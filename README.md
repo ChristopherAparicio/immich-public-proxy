@@ -31,6 +31,9 @@ bypass the queue. See [FORK.md](./FORK.md) for the complete delta and upstream
 update policy and [the ZIP architecture](./docs/zip-downloads.md) for lifecycle,
 resource and threat-model details.
 
+Every interactive page links to the exact running source revision as required
+by AGPL-3.0. Application logs redact share keys and secret query values.
+
 > [!WARNING]
 > Run exactly one application replica. Queue jobs and session signing are
 > process-local; horizontal scaling is not supported by this release.

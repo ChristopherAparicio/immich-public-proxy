@@ -1,4 +1,5 @@
 import dayjs from 'dayjs'
+import { redactSensitiveLogText } from './redact'
 
 /**
  * Output a timestamped log message. Calling `log(...)` is equivalent to
@@ -16,9 +17,11 @@ type LogFn = ((message: string) => void) & {
   error: (message: string) => void
 }
 
-const logImpl: LogFn = ((message: string) => console.log(timestamp() + ' ' + message)) as LogFn
-logImpl.info = (message: string) => console.log(timestamp() + ' ' + message)
-logImpl.warn = (message: string) => console.warn(timestamp() + ' WARN ' + message)
-logImpl.error = (message: string) => console.error(timestamp() + ' ERROR ' + message)
+const safe = (message: string) => redactSensitiveLogText(message)
+
+const logImpl: LogFn = ((message: string) => console.log(timestamp() + ' ' + safe(message))) as LogFn
+logImpl.info = (message: string) => console.log(timestamp() + ' ' + safe(message))
+logImpl.warn = (message: string) => console.warn(timestamp() + ' WARN ' + safe(message))
+logImpl.error = (message: string) => console.error(timestamp() + ' ERROR ' + safe(message))
 
 export const log = logImpl

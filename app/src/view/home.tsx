@@ -1,3 +1,5 @@
+import { SourceOffer, sourceCodeUrl } from './sourceOffer'
+
 export function Home () {
   return (
     <html lang="en">
@@ -22,15 +24,23 @@ export function Home () {
               height: 280px;
               opacity: 0.3;
             }
+            .source-offer {
+              position: fixed;
+              right: 1rem;
+              bottom: 1rem;
+              font: 12px system-ui, sans-serif;
+            }
+            .source-offer a { color: #b7b7b7; }
           `
         }}/>
       </head>
       <body>
         <div class="container">
-          <a href="https://github.com/alangrainger/immich-public-proxy">
+          <a href={sourceCodeUrl()}>
             <img src="/share/static/images/ipp.svg" alt=""/>
           </a>
         </div>
+        <SourceOffer/>
       </body>
     </html>
   )

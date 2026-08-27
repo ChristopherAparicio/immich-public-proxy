@@ -16,6 +16,7 @@ import { title } from '../share'
 import { getFilename } from '../gallery/filename'
 import { createLimiter } from '../utils/limiter'
 import { createIdleTimeoutStream } from '../utils/idleTimeoutStream'
+import { urlPathForLog } from '../utils/redact'
 
 const STAGING_DIR_PREFIX = 'ipp-zip-'
 const ZIP_CACHE_PREFIX = 'ipp-zip-cache-'
@@ -129,7 +130,7 @@ export async function downloadAssets (
   if (cached) {
     scheduleZipCacheDeletion(cachePath, Math.max(1, cached.mtimeMs + cacheTtlMs - Date.now()))
     const completed = await serveZipFile(res, cachePath, filename, cached)
-    if (!completed) log(`Cached zip download for share ${share.key} cancelled by client`)
+    if (!completed) log('Cached ZIP download cancelled by client')
     return
   }
   await fs.rm(cachePath, { force: true }).catch(() => { /* best effort */ })
@@ -144,7 +145,7 @@ export async function downloadAssets (
 
   const archive = archiver('zip', { store: true })
   // Without a listener, an archiver 'error' emission would crash the process.
-  archive.on('error', e => log(`Archiver error for share ${share.key}: ${e.message}`))
+  archive.on('error', e => log(`ZIP archiver error: ${e.message}`))
 
   const options: StagingOptions = {
     stagingDir: await fs.mkdtemp(join(tmpdir(), STAGING_DIR_PREFIX)),
@@ -171,12 +172,12 @@ export async function downloadAssets (
     const stages = stageAssetsToDisk(share, assets, options, controller.signal)
     const failure = await archiveStaged(archive, stages, controller, onProgress, assets.length)
     if (clientGone) {
-      log(`Zip download for share ${share.key} cancelled by client`)
+      log('ZIP download cancelled by client')
       archive.abort()
       return
     }
     if (failure) {
-      abortDownload(archive, res, share, failure)
+      abortDownload(archive, res, failure)
       return
     }
 
@@ -197,11 +198,11 @@ export async function downloadAssets (
 
     const cacheStat = await fs.stat(options.cachePath)
     if (clientGone) {
-      log(`Zip cache prepared for share ${share.key} after client disconnected`)
+      log('ZIP cache prepared after client disconnected')
       return
     }
     const completed = await serveZipFile(res, options.cachePath, filename, cacheStat)
-    if (!completed) log(`Zip download for share ${share.key} cancelled by client; cached archive retained`)
+    if (!completed) log('ZIP download cancelled by client; cached archive retained')
   } finally {
     await fs.rm(options.stagingDir, { recursive: true, force: true }).catch(() => { /* best effort */ })
     if (!cacheReady) await fs.rm(options.partialPath, { force: true }).catch(() => { /* best effort */ })
@@ -260,11 +261,11 @@ async function archiveStaged (
   return failure
 }
 
-function abortDownload (archive: Archiver, res: Response, share: SharedLink, failure: Failure) {
+function abortDownload (archive: Archiver, res: Response, failure: Failure) {
   const detail = failure.status !== undefined
     ? `HTTP ${failure.status}`
     : (failure.error instanceof Error ? failure.error.message : String(failure.error))
-  log(`Aborting zip download for share ${share.key}: failed to fetch asset ${failure.asset.id} from ${failure.url} (${detail})`)
+  log(`Aborting ZIP download: failed to fetch asset ${failure.asset.id} from ${urlPathForLog(failure.url)} (${detail})`)
   archive.abort()
   if (failure.error instanceof ZipSizeLimitError && !res.headersSent) {
     res.removeHeader('Content-Disposition')

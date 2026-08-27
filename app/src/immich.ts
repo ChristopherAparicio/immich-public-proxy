@@ -155,7 +155,7 @@ export async function handleShareRequest (req: IncomingShareRequest, res: Respon
 
   // A password is required, but the visitor-provided one doesn't match
   if (sharedLinkRes.passwordRequired && req.password) {
-    log('Invalid password for key ' + req.key)
+    log('Invalid password for shared link')
     res.status(401)
     // Delete the cookie-session data, so that it doesn't keep saying "Invalid password"
     if (req.req?.session) delete req.req.session[req.key]
@@ -200,7 +200,7 @@ export async function handleShareRequest (req: IncomingShareRequest, res: Respon
     await downloadAll(res, link)
   } else if (link.assets.length === 1) {
     // This is an individual item (not a gallery)
-    log('Serving link ' + req.key)
+    log('Serving shared link')
     const asset = link.assets[0]
     // Photos default to a direct image unless `singleImage` opts into a gallery;
     // videos default to a gallery unless `singleVideo` is explicitly disabled.
@@ -217,7 +217,7 @@ export async function handleShareRequest (req: IncomingShareRequest, res: Respon
     }
   } else {
     // Multiple images - render as a gallery
-    log('Serving link ' + req.key)
+    log('Serving shared link')
     await gallery(res, link)
   }
 }
@@ -270,7 +270,7 @@ async function fetchShareByKey (key: string, password?: string, keyType: KeyType
         // (mapAlbum still returns albumThumbnailAssetId).
         if (link.type === AlbumType.album) {
           if (!link.album?.id) {
-            log('Album share missing album id for key ' + key)
+            log('Album share is missing an album id')
             return {
               valid: false
             }
@@ -289,11 +289,11 @@ async function fetchShareByKey (key: string, password?: string, keyType: KeyType
         link.password = password
         if (link.expiresAt && dayjs(link.expiresAt) < dayjs()) {
           // This link has expired
-          log('Expired link ' + key)
+          log('Shared link has expired')
         } else {
           if (!Array.isArray(link.assets)) {
             // Defensive guard: the returned album should always(?) populate this array
-            log('Shared link ' + key + ' returned no assets array (type ' + link.type + ')')
+            log('Shared link returned no assets array (type ' + link.type + ')')
             link.assets = []
           }
           // Filter assets to exclude trashed assets
@@ -321,7 +321,7 @@ async function fetchShareByKey (key: string, password?: string, keyType: KeyType
         // Check the message to distinguish between the two cases.
         if (jsonBody?.message === 'Invalid share key' || jsonBody?.message === 'Invalid share slug') {
           // Known invalid key/slug - treat as invalid request
-          log('Invalid share key ' + key)
+          log('Invalid share key')
         } else {
           // Default: treat as password required (fail-safe)
           return {
@@ -330,19 +330,18 @@ async function fetchShareByKey (key: string, password?: string, keyType: KeyType
           }
         }
       } else {
-        console.log(JSON.stringify(jsonBody))
+        log('Unexpected Immich response status ' + res.status)
       }
     }
   } else {
     // Otherwise return failure
-    log('Immich response ' + res.status + ' for key ' + key)
+    log('Immich response ' + res.status + ' for a shared link')
     try {
-      console.log(res.headers.get('Content-Type'))
-      console.log((await res.text()).slice(0, 500))
+      await res.body?.cancel()
       log('Unexpected response from Immich API at ' + apiUrl())
       log('Please make sure the IPP container is able to reach this path.')
     } catch (e) {
-      console.log(e)
+      log('Failed to inspect the unexpected Immich response: ' + (e instanceof Error ? e.message : String(e)))
     }
   }
   return {

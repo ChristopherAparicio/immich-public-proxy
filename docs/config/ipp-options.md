@@ -131,6 +131,14 @@ Maximum time a queued browser may stop polling before its job is discarded.
 Time reserved for the visitor to press the explicit download button after ZIP
 preparation completes.
 
+### `downloadZipMaxReadyLeaseSeconds`
+
+**Type:** `int` · **Default:** `300`
+
+Absolute maximum time a prepared job may retain the active queue slot. HEAD,
+Range and interrupted-transfer retries receive a short retry window but can
+never extend this deadline.
+
 ### `allowLegacyDirectZipDownload`
 
 **Type:** `bool` · **Default:** `false`

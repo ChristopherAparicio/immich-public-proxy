@@ -3,6 +3,19 @@
 All notable fork-specific changes are documented here. Upstream history and
 release notes remain available in the upstream repository.
 
+## 3.2.1-immich-share.3 — 2026-08-27
+
+### Security
+
+- Bound HEAD, Range and interrupted-transfer retries with an absolute ready
+  deadline so one visitor cannot retain the global ZIP slot indefinitely.
+- Limited each visitor session to one non-terminal ZIP job and capped
+  lightweight terminal tombstones while dropping retained assets immediately.
+- Released the active queue slot on every transfer exception.
+- Removed queue-position disclosure and redacted share credentials from logs.
+- Added a prominent AGPL source offer linked to the exact running release.
+- Added adversarial regression tests for leases, cleanup, fairness and logs.
+
 ## 3.2.1-immich-share.2 — 2026-08-27
 
 ### Security

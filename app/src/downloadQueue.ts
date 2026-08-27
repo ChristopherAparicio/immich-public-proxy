@@ -22,7 +22,6 @@ export interface ZipJobStatus {
   completedItems?: number
   totalItems?: number
   sizeBytes?: number
-  position?: number
   message?: string
 }
 
@@ -31,8 +30,8 @@ type ZipJob = {
   scope: string
   visitorId: string
   signature: string
-  share: SharedLink
-  assets: Asset[]
+  share?: SharedLink
+  assets?: Asset[]
   state: ZipJobState
   phase?: 'fetching' | 'finalizing'
   completedItems: number
@@ -42,6 +41,8 @@ type ZipJob = {
   createdAt: number
   lastSeenAt: number
   readyUntil?: number
+  readyDeadline?: number
+  terminalAt?: number
   leaveRequested?: boolean
 }
 
@@ -52,6 +53,17 @@ export class ZipQueueFullError extends Error {
     this.name = 'ZipQueueFullError'
   }
 }
+
+/** Raised when one browser session already owns a non-terminal ZIP job. */
+export class ZipVisitorBusyError extends Error {
+  constructor () {
+    super('A ZIP download is already active for this visitor')
+    this.name = 'ZipVisitorBusyError'
+  }
+}
+
+const TERMINAL_RETENTION_MS = 5 * 60_000
+const MAX_TERMINAL_JOBS = 64
 
 /**
  * Minimal writable response used to prepare the immutable ZIP cache without
@@ -140,15 +152,15 @@ export class ZipDownloadQueue {
   enqueue (scope: string, visitorId: string, share: SharedLink, assets: Asset[]): ZipJobStatus {
     this.sweep()
     const signature = assetSignature(assets)
-    const existing = [...this.jobs.values()].find(job =>
-      job.scope === scope &&
-      job.visitorId === visitorId &&
-      job.signature === signature &&
-      !['complete', 'failed', 'cancelled'].includes(job.state)
+    const visitorJob = [...this.jobs.values()].find(job =>
+      job.visitorId === visitorId && !this.isTerminal(job)
     )
-    if (existing) {
-      existing.lastSeenAt = Date.now()
-      return this.publicStatus(existing)
+    if (visitorJob) {
+      if (visitorJob.scope === scope && visitorJob.signature === signature) {
+        visitorJob.lastSeenAt = Date.now()
+        return this.publicStatus(visitorJob)
+      }
+      throw new ZipVisitorBusyError()
     }
 
     const maxWaiting = Math.max(1, getNumericConfigOption('ipp.downloadZipQueueMaxWaiting', 3))
@@ -191,12 +203,9 @@ export class ZipDownloadQueue {
       // The cache build is bounded and useful even if the visitor leaves. Let
       // it finish, but release the slot as soon as preparation settles.
       job.leaveRequested = true
-      job.state = 'cancelled'
       return true
     }
-    job.state = 'cancelled'
-    this.removeWaiting(job.id)
-    if (this.activeId === job.id) this.release(job)
+    this.finish(job, 'cancelled')
     return true
   }
 
@@ -211,21 +220,34 @@ export class ZipDownloadQueue {
     if (!job) return 'missing'
     job.lastSeenAt = Date.now()
     if (this.activeId !== job.id || job.state !== 'ready') return 'busy'
+    if (!job.share || !job.assets) return 'missing'
 
     job.state = 'downloading'
-    await this.download(res, job.share, job.assets)
+    try {
+      await this.download(res, job.share, job.assets)
 
-    // HEAD and Range requests may be followed by another request from Safari.
-    // A disconnected full response also needs a short resume window.
-    const keepForRetry = options.head || options.range || !res.writableFinished
-    if (keepForRetry) {
-      job.state = 'ready'
-      job.readyUntil = Date.now() + 60_000
-    } else {
-      job.state = 'complete'
-      this.release(job)
+      // HEAD and Range requests may be followed by another request from Safari.
+      // A disconnected full response also needs a short resume window. That
+      // retry window is capped by the immutable deadline established when the
+      // archive first became ready, so probes cannot monopolise the queue.
+      const now = Date.now()
+      const keepForRetry = options.head || options.range || !res.writableFinished
+      if (keepForRetry) {
+        if (job.readyDeadline !== undefined && now < job.readyDeadline) {
+          job.state = 'ready'
+          job.readyUntil = Math.min(now + 60_000, job.readyDeadline)
+        } else {
+          this.finish(job, 'cancelled')
+        }
+      } else {
+        this.finish(job, 'complete')
+      }
+      return 'ok'
+    } catch (error) {
+      job.message = safeMessageForStatus(503)
+      this.finish(job, 'failed')
+      throw error
     }
-    return 'ok'
   }
 
   private authorizedJob (scope: string, visitorId: string, id: string): ZipJob | undefined {
@@ -244,10 +266,6 @@ export class ZipDownloadQueue {
     if (job.phase) result.phase = job.phase
     if (job.sizeBytes !== undefined) result.sizeBytes = job.sizeBytes
     if (job.message) result.message = job.message
-    if (job.state === 'queued') {
-      const position = this.waiting.indexOf(job.id)
-      if (position >= 0) result.position = position + 1
-    }
     return result
   }
 
@@ -262,15 +280,18 @@ export class ZipDownloadQueue {
       job.phase = 'fetching'
       this.prepare(job).catch(error => {
         log.error(`ZIP queue preparation failed: ${error instanceof Error ? error.message : String(error)}`)
-        job.state = 'failed'
         job.message = safeMessageForStatus(503)
-        this.release(job)
+        this.finish(job, 'failed')
       })
       return
     }
   }
 
   private async prepare (job: ZipJob) {
+    if (!job.share || !job.assets) {
+      this.finish(job, 'failed')
+      return
+    }
     const response = new PreparationResponse()
     const onProgress = (progress: DownloadProgress) => {
       job.phase = progress.phase
@@ -281,15 +302,14 @@ export class ZipDownloadQueue {
 
     if (job.leaveRequested || job.state === 'cancelled') {
       job.state = 'cancelled'
-      this.release(job)
+      this.finish(job, 'cancelled')
       return
     }
 
     const size = Number(response.getHeader('content-length'))
     if (response.statusCode !== 200 || !Number.isSafeInteger(size) || size <= 0) {
-      job.state = 'failed'
       job.message = safeMessageForStatus(response.statusCode)
-      this.release(job)
+      this.finish(job, 'failed')
       return
     }
 
@@ -297,17 +317,46 @@ export class ZipDownloadQueue {
     job.phase = 'finalizing'
     job.sizeBytes = size
     job.state = 'ready'
-    job.readyUntil = Date.now() + Math.max(
+    const now = Date.now()
+    const readyLeaseSeconds = Math.max(
       30,
       getNumericConfigOption('ipp.downloadZipReadyLeaseSeconds', 120)
-    ) * 1000
+    )
+    const maxReadyLeaseSeconds = Math.max(
+      readyLeaseSeconds,
+      getNumericConfigOption('ipp.downloadZipMaxReadyLeaseSeconds', 300)
+    )
+    job.readyUntil = now + readyLeaseSeconds * 1000
+    job.readyDeadline = now + maxReadyLeaseSeconds * 1000
   }
 
-  private release (job: ZipJob) {
+  private finish (job: ZipJob, state: Extract<ZipJobState, 'complete' | 'failed' | 'cancelled'>) {
+    job.state = state
     if (this.activeId === job.id) this.activeId = undefined
     this.removeWaiting(job.id)
-    setTimeout(() => this.jobs.delete(job.id), 5 * 60_000).unref()
+    // Terminal status remains briefly available to the browser, but discard
+    // the potentially large share graph immediately and cap tombstones.
+    job.share = undefined
+    job.assets = undefined
+    job.readyUntil = undefined
+    job.readyDeadline = undefined
+    job.terminalAt = Date.now()
+    this.pruneTerminalJobs()
     queueMicrotask(() => this.pump())
+  }
+
+  private isTerminal (job: ZipJob) {
+    return job.state === 'complete' || job.state === 'failed' || job.state === 'cancelled'
+  }
+
+  private pruneTerminalJobs () {
+    const terminal = [...this.jobs.values()]
+      .filter(job => this.isTerminal(job))
+      .sort((left, right) => (left.terminalAt || 0) - (right.terminalAt || 0))
+    while (terminal.length > MAX_TERMINAL_JOBS) {
+      const oldest = terminal.shift()
+      if (oldest) this.jobs.delete(oldest.id)
+    }
   }
 
   private removeWaiting (id: string) {
@@ -324,12 +373,16 @@ export class ZipDownloadQueue {
 
     for (const job of this.jobs.values()) {
       if (job.state === 'queued' && now - job.lastSeenAt > staleQueuedMs) {
-        job.state = 'cancelled'
-        this.removeWaiting(job.id)
+        this.finish(job, 'cancelled')
       }
-      if (job.state === 'ready' && job.readyUntil !== undefined && now > job.readyUntil) {
-        job.state = 'cancelled'
-        this.release(job)
+      if (job.state === 'ready' && (
+        (job.readyUntil !== undefined && now > job.readyUntil) ||
+        (job.readyDeadline !== undefined && now > job.readyDeadline)
+      )) {
+        this.finish(job, 'cancelled')
+      }
+      if (this.isTerminal(job) && job.terminalAt !== undefined && now - job.terminalAt > TERMINAL_RETENTION_MS) {
+        this.jobs.delete(job.id)
       }
     }
     this.pump()

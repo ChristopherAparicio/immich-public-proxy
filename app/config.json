@@ -15,6 +15,7 @@
     "downloadZipQueueMaxWaiting": 3,
     "downloadZipQueueHeartbeatSeconds": 300,
     "downloadZipReadyLeaseSeconds": 120,
+    "downloadZipMaxReadyLeaseSeconds": 300,
     "allowLegacyDirectZipDownload": false,
     "allowSlugLinks": true,
     "showHomePage": true,

@@ -1,3 +1,5 @@
+import { SourceOffer } from './sourceOffer'
+
 interface PasswordProps {
   shareKey: string
   notifyInvalidPassword: boolean
@@ -77,6 +79,7 @@ export function Password ({ shareKey, notifyInvalidPassword }: PasswordProps) {
             <div></div>
           </div>
         </main>
+        <SourceOffer/>
         <script dangerouslySetInnerHTML={{ __html: submitScript }}/>
       </body>
     </html>

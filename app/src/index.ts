@@ -17,7 +17,7 @@ import { buildAssetMetadata } from './gallery/metadata'
 import crypto from 'crypto'
 import { assetBuffer } from './stream/asset'
 import { downloadAssets, sweepStaleStagingDirs } from './stream/download'
-import { zipDownloadQueue, ZipQueueFullError } from './downloadQueue'
+import { zipDownloadQueue, ZipQueueFullError, ZipVisitorBusyError } from './downloadQueue'
 import dayjs from 'dayjs'
 import { NextFunction, Request, Response } from 'express-serve-static-core'
 import { Asset, AssetType, ImageSize, KeyType, SharedLink } from './types'
@@ -206,6 +206,11 @@ app.post('/:shareType(share|s)/:key/download/prepare', requireCsrf, decodeCookie
     if (error instanceof ZipQueueFullError) {
       res.set('Retry-After', '30')
       res.status(429).json({ state: 'failed', message: 'The download queue is full. Please try again later.' })
+      return
+    }
+    if (error instanceof ZipVisitorBusyError) {
+      res.set('Retry-After', '30')
+      res.status(429).json({ state: 'failed', message: 'A ZIP request is already active in this browser.' })
       return
     }
     throw error
