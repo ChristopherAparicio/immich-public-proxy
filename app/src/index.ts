@@ -17,7 +17,12 @@ import { buildAssetMetadata } from './gallery/metadata'
 import crypto from 'crypto'
 import { assetBuffer } from './stream/asset'
 import { downloadAssets, sweepStaleStagingDirs } from './stream/download'
-import { zipDownloadQueue, ZipQueueFullError, ZipVisitorBusyError } from './downloadQueue'
+import {
+  zipDownloadQueue,
+  ZipPlanUnavailableError,
+  ZipQueueFullError,
+  ZipVisitorBusyError
+} from './downloadQueue'
 import dayjs from 'dayjs'
 import { NextFunction, Request, Response } from 'express-serve-static-core'
 import { Asset, AssetType, ImageSize, KeyType, SharedLink } from './types'
@@ -183,6 +188,36 @@ function selectedZipAssets (req: Request, share: SharedLink): Asset[] | null {
   return selected.length === ids.size ? selected : null
 }
 
+app.post('/:shareType(share|s)/:key/download/plan', requireCsrf, decodeCookie, asyncHandler(async (req, res) => {
+  res.set('Cache-Control', 'private, no-store')
+  const keyType = getKeyTypeFromShare(req.params.shareType)
+  const resolved = await resolveShare(req, keyType)
+  if (!resolved.ok || !canDownload(resolved.link)) {
+    res.status(404).json({ message: 'ZIP planning unavailable.' })
+    return
+  }
+  try {
+    const plan = await zipDownloadQueue.plan(
+      zipScope(req, keyType),
+      zipVisitorId(req),
+      resolved.link,
+      resolved.link.assets
+    )
+    res.json(plan)
+  } catch (error) {
+    if (error instanceof ZipPlanUnavailableError) {
+      res.status(413).json({ message: error.message })
+      return
+    }
+    if (error instanceof ZipVisitorBusyError) {
+      res.set('Retry-After', '30')
+      res.status(429).json({ message: 'A ZIP request is already active in this browser.' })
+      return
+    }
+    throw error
+  }
+}))
+
 app.post('/:shareType(share|s)/:key/download/prepare', requireCsrf, decodeCookie, asyncHandler(async (req, res) => {
   res.set('Cache-Control', 'private, no-store')
   const keyType = getKeyTypeFromShare(req.params.shareType)
@@ -191,18 +226,30 @@ app.post('/:shareType(share|s)/:key/download/prepare', requireCsrf, decodeCookie
     res.status(404).json({ state: 'failed', message: 'ZIP request unavailable.' })
     return
   }
-  const assets = selectedZipAssets(req, resolved.link)
-  if (!assets) {
-    res.status(400).json({ state: 'failed', message: 'Invalid asset selection.' })
-    return
-  }
   try {
-    const status = zipDownloadQueue.enqueue(
-      zipScope(req, keyType),
-      zipVisitorId(req),
-      resolved.link,
-      assets
-    )
+    const scope = zipScope(req, keyType)
+    const visitorId = zipVisitorId(req)
+    let status
+    if (req.body?.planId !== undefined || req.body?.part !== undefined) {
+      const planId = String(req.body?.planId || '')
+      const part = Number(req.body?.part)
+      if (!validZipJobId(planId) || !Number.isSafeInteger(part) || part < 1) {
+        res.status(400).json({ state: 'failed', message: 'Invalid ZIP part request.' })
+        return
+      }
+      status = zipDownloadQueue.enqueuePart(scope, visitorId, planId, part)
+      if (!status) {
+        res.status(404).json({ state: 'failed', message: 'ZIP plan expired. Please plan the download again.' })
+        return
+      }
+    } else {
+      const assets = selectedZipAssets(req, resolved.link)
+      if (!assets) {
+        res.status(400).json({ state: 'failed', message: 'Invalid asset selection.' })
+        return
+      }
+      status = zipDownloadQueue.enqueue(scope, visitorId, resolved.link, assets)
+    }
     res.status(202).json(status)
   } catch (error) {
     if (error instanceof ZipQueueFullError) {

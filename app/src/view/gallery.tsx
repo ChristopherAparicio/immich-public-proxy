@@ -96,12 +96,13 @@ export function Gallery (props: GalleryProps) {
           </header>
         )}
         {props.showDownloadZip && (
-          <dialog id="zip-dialog" aria-labelledby="zip-dialog-title">
+          <dialog id="zip-dialog" role="dialog" aria-modal="true" aria-labelledby="zip-dialog-title">
             <div class="zip-dialog-card">
               <h2 id="zip-dialog-title">Preparing your ZIP…</h2>
               <p id="zip-dialog-message" aria-live="polite">Please wait.</p>
               <progress id="zip-progress"></progress>
               <p id="zip-dialog-detail" class="zip-dialog-detail"></p>
+              <div id="zip-parts" class="zip-parts" hidden></div>
               <div class="zip-dialog-actions">
                 <button id="zip-leave" class="zip-secondary" type="button" hidden>Leave queue</button>
                 <button id="zip-close" class="zip-secondary" type="button">Close</button>
