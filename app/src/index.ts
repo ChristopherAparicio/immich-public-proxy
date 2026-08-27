@@ -2,7 +2,6 @@
 
 import 'dotenv/config'
 import express from 'express'
-import cookieSession from 'cookie-session'
 import {
   accessible,
   enforceMinimumImmichVersion,
@@ -33,6 +32,7 @@ import { h } from 'preact'
 import { renderPage } from './view/render'
 import { Home } from './view/home'
 import { ensureCsrfCookie, requireCsrf } from './csrf'
+import { installSession } from './session'
 
 // Extend the Request type with a `password` property
 declare module 'express-serve-static-core' {
@@ -46,19 +46,14 @@ declare module 'express-serve-static-core' {
 loadConfig()
 
 const app = express()
-app.use(cookieSession({
-  name: 'session',
-  httpOnly: true,
-  sameSite: 'lax',
-  secret: crypto.randomBytes(32).toString('base64url')
-}))
+const inProduction = process.env.NODE_ENV === 'production'
+installSession(app, crypto.randomBytes(32).toString('base64url'), inProduction)
 app.use(ensureCsrfCookie)
 // For parsing the password unlock form and POSTed JSON payloads
 app.use(express.json())
 // For parsing the selective-download form POST (form-encoded body)
 app.use(express.urlencoded({ extended: false, limit: '1mb' }))
 // Cache-busted, immutable static assets under a per-release version segment.
-const inProduction = process.env.NODE_ENV === 'production'
 app.use('/share/static/' + ASSET_VERSION, express.static('public', {
   immutable: inProduction,
   maxAge: inProduction ? '365d' : 0,
