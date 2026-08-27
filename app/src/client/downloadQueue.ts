@@ -8,12 +8,30 @@ type ZipStatus = {
   totalItems?: number
   sizeBytes?: number
   message?: string
+  partIndex?: number
+  partCount?: number
+}
+
+type ZipPlanPart = {
+  index: number
+  assetCount: number
+  sizeBytes: number
+}
+
+type ZipPlan = {
+  id: string
+  totalItems: number
+  totalBytes: number
+  requiresSplit: boolean
+  parts: ZipPlanPart[]
 }
 
 let downloadPath = ''
 let currentJob: ZipStatus | null = null
 let pollTimer: number | undefined
 let pendingAssets: string[] | undefined
+let currentPlan: ZipPlan | null = null
+let pendingPart: number | undefined
 
 const byId = <T extends HTMLElement>(id: string) => document.getElementById(id) as T | null
 
@@ -58,17 +76,19 @@ function openDialog () {
   if (dialog && !dialog.open) dialog.showModal()
 }
 
-function setMainButtonState (state: ZipState | 'idle') {
+function setMainButtonState (state: ZipState | 'idle' | 'planning') {
   const button = byId<HTMLAnchorElement>('download-all')
   if (!button) return
   button.dataset.state = state
-  const label = state === 'queued'
-    ? 'ZIP queued'
-    : state === 'preparing'
-      ? 'Preparing ZIP'
-      : state === 'ready'
-        ? 'ZIP ready to download'
-        : 'Download all'
+  const label = state === 'planning'
+    ? 'Analyzing album'
+    : state === 'queued'
+      ? 'ZIP queued'
+      : state === 'preparing'
+        ? 'Preparing ZIP'
+        : state === 'ready'
+          ? 'ZIP ready to download'
+          : 'Download all'
   button.title = label
   button.setAttribute('aria-label', label)
 }
@@ -78,9 +98,52 @@ function showElement (id: string, visible: boolean) {
   if (element) element.hidden = !visible
 }
 
+function clearParts () {
+  const parts = byId<HTMLElement>('zip-parts')
+  if (parts) parts.replaceChildren()
+  showElement('zip-parts', false)
+}
+
+function renderPlanPicker (plan: ZipPlan) {
+  currentPlan = plan
+  currentJob = null
+  pendingPart = undefined
+  setMainButtonState('idle')
+  const title = byId<HTMLElement>('zip-dialog-title')
+  const message = byId<HTMLElement>('zip-dialog-message')
+  const detail = byId<HTMLElement>('zip-dialog-detail')
+  const parts = byId<HTMLElement>('zip-parts')
+  if (title) title.textContent = 'Download this album in parts'
+  if (message) message.textContent = `${formatBytes(plan.totalBytes)} will be split into ${plan.parts.length} independent ZIP files.`
+  if (detail) detail.textContent = 'Choose one part. Other visitors can use the queue between your downloads.'
+  showElement('zip-progress', false)
+  showElement('zip-leave', false)
+  showElement('zip-action', false)
+  showElement('zip-parts', true)
+  if (!parts) return
+  parts.replaceChildren()
+  for (const part of plan.parts) {
+    const button = document.createElement('button')
+    button.type = 'button'
+    button.className = 'zip-part'
+    const label = document.createElement('span')
+    label.textContent = `Part ${part.index} of ${plan.parts.length}`
+    const meta = document.createElement('span')
+    meta.className = 'zip-part-meta'
+    meta.textContent = `${part.assetCount} ${part.assetCount === 1 ? 'item' : 'items'} · ${formatBytes(part.sizeBytes)}`
+    button.append(label, meta)
+    button.addEventListener('click', () => {
+      pendingPart = part.index
+      prepare()
+    })
+    parts.append(button)
+  }
+}
+
 function renderStatus (status: ZipStatus) {
   currentJob = status
-  sessionStorage.setItem(storageKey(), status.id)
+  if (validJobId(status.id)) sessionStorage.setItem(storageKey(), status.id)
+  else sessionStorage.removeItem(storageKey())
   setMainButtonState(status.state)
 
   const title = byId<HTMLElement>('zip-dialog-title')
@@ -88,6 +151,7 @@ function renderStatus (status: ZipStatus) {
   const detail = byId<HTMLElement>('zip-dialog-detail')
   const progress = byId<HTMLProgressElement>('zip-progress')
   const action = byId<HTMLButtonElement>('zip-action')
+  clearParts()
 
   showElement('zip-leave', ['queued', 'preparing', 'ready'].includes(status.state))
   showElement('zip-action', status.state === 'ready' || status.state === 'failed')
@@ -99,7 +163,11 @@ function renderStatus (status: ZipStatus) {
     if (detail) detail.textContent = 'You can close this window. Your request will remain queued while this page is open.'
     if (progress) progress.removeAttribute('value')
   } else if (status.state === 'preparing') {
-    if (title) title.textContent = 'Preparing your ZIP…'
+    if (title) {
+      title.textContent = status.partIndex && status.partCount
+        ? `Preparing part ${status.partIndex} of ${status.partCount}…`
+        : 'Preparing your ZIP…'
+    }
     if (message) {
       message.textContent = status.phase === 'finalizing'
         ? 'Finalizing the archive…'
@@ -116,7 +184,11 @@ function renderStatus (status: ZipStatus) {
     }
   } else if (status.state === 'ready') {
     const size = formatBytes(status.sizeBytes)
-    if (title) title.textContent = 'Your ZIP is ready'
+    if (title) {
+      title.textContent = status.partIndex && status.partCount
+        ? `Part ${status.partIndex} of ${status.partCount} is ready`
+        : 'Your ZIP is ready'
+    }
     if (message) message.textContent = size ? `Archive size: ${size}` : 'The archive is ready to download.'
     if (detail) detail.textContent = 'Tap the button below to start the download.'
     if (action) action.textContent = size ? `Download ZIP — ${size}` : 'Download ZIP'
@@ -131,6 +203,11 @@ function renderStatus (status: ZipStatus) {
     showElement('zip-leave', false)
     setMainButtonState('idle')
     sessionStorage.removeItem(storageKey())
+    if (currentPlan?.requiresSplit && status.partIndex) {
+      window.setTimeout(() => {
+        if (currentPlan) renderPlanPicker(currentPlan)
+      }, 750)
+    }
   } else if (status.state === 'failed' || status.state === 'cancelled') {
     if (title) title.textContent = status.state === 'failed' ? 'ZIP preparation failed' : 'ZIP request cancelled'
     if (message) message.textContent = status.message || 'Please try again.'
@@ -180,6 +257,7 @@ async function prepare () {
   const message = byId<HTMLElement>('zip-dialog-message')
   if (title) title.textContent = 'Requesting your ZIP…'
   if (message) message.textContent = 'Please wait.'
+  clearParts()
   try {
     const response = await fetch(`${downloadPath}/prepare`, {
       method: 'POST',
@@ -188,7 +266,11 @@ async function prepare () {
         'Content-Type': 'application/json',
         'X-IPP-CSRF-Token': csrfToken()
       },
-      body: JSON.stringify(pendingAssets ? { assets: pendingAssets } : {})
+      body: JSON.stringify(pendingAssets
+        ? { assets: pendingAssets }
+        : currentPlan && pendingPart
+          ? { planId: currentPlan.id, part: pendingPart }
+          : {})
     })
     if (response.status === 403) {
       window.location.reload()
@@ -209,11 +291,74 @@ async function prepare () {
   }
 }
 
+async function planDownload () {
+  currentJob = null
+  currentPlan = null
+  pendingPart = undefined
+  openDialog()
+  clearParts()
+  setMainButtonState('planning')
+  const title = byId<HTMLElement>('zip-dialog-title')
+  const message = byId<HTMLElement>('zip-dialog-message')
+  const detail = byId<HTMLElement>('zip-dialog-detail')
+  if (title) title.textContent = 'Analyzing this album…'
+  if (message) message.textContent = 'Checking original file sizes before using VPS resources.'
+  if (detail) detail.textContent = 'No ZIP is being generated yet.'
+  showElement('zip-progress', true)
+  showElement('zip-leave', false)
+  showElement('zip-action', false)
+  try {
+    const response = await fetch(`${downloadPath}/plan`, {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: { 'X-IPP-CSRF-Token': csrfToken() }
+    })
+    if (response.status === 403) {
+      window.location.reload()
+      return
+    }
+    if (!response.ok) {
+      const body = await response.json().catch(() => ({})) as { message?: string }
+      showLocalError(body.message || 'The album could not be planned safely. Please try again.')
+      return
+    }
+    const plan = await response.json() as ZipPlan
+    const validParts = Array.isArray(plan.parts) &&
+      plan.parts.length >= 1 &&
+      plan.parts.length <= 256 &&
+      plan.parts.every((part, index) =>
+        part?.index === index + 1 &&
+        Number.isSafeInteger(part.assetCount) && part.assetCount > 0 &&
+        Number.isSafeInteger(part.sizeBytes) && part.sizeBytes > 0
+      )
+    const summedItems = validParts ? plan.parts.reduce((sum, part) => sum + part.assetCount, 0) : 0
+    const summedBytes = validParts ? plan.parts.reduce((sum, part) => sum + part.sizeBytes, 0) : 0
+    if (!validJobId(plan.id) ||
+      !validParts ||
+      !Number.isSafeInteger(plan.totalItems) || plan.totalItems !== summedItems ||
+      !Number.isSafeInteger(plan.totalBytes) || plan.totalBytes !== summedBytes ||
+      plan.requiresSplit !== (plan.parts.length > 1)) {
+      showLocalError('The ZIP plan was invalid. Please try again.')
+      return
+    }
+    currentPlan = plan
+    if (plan.requiresSplit) {
+      renderPlanPicker(plan)
+      return
+    }
+    pendingPart = 1
+    prepare()
+  } catch {
+    showLocalError('The album could not be analyzed. Check your connection and try again.')
+  }
+}
+
 function reset () {
   if (pollTimer !== undefined) window.clearTimeout(pollTimer)
   pollTimer = undefined
   currentJob = null
   pendingAssets = undefined
+  pendingPart = undefined
   if (downloadPath) sessionStorage.removeItem(storageKey())
   setMainButtonState('idle')
 }
@@ -237,8 +382,18 @@ async function leaveQueue () {
 function downloadReadyZip () {
   if (!currentJob) return
   if (currentJob.state === 'failed' || currentJob.state === 'cancelled') {
+    const retryPart = currentJob.partIndex || pendingPart
+    const retryAssets = pendingAssets
     reset()
-    prepare()
+    if (currentPlan && retryPart) {
+      pendingPart = retryPart
+      prepare()
+    } else if (retryAssets) {
+      pendingAssets = retryAssets
+      prepare()
+    } else {
+      planDownload()
+    }
     return
   }
   if (currentJob.state !== 'ready') return
@@ -263,7 +418,15 @@ export function startZipDownload (assets?: string[]) {
     openDialog()
     return
   }
-  prepare()
+  if (assets) {
+    currentPlan = null
+    prepare()
+  } else if (currentPlan?.requiresSplit) {
+    openDialog()
+    renderPlanPicker(currentPlan)
+  } else {
+    planDownload()
+  }
 }
 
 export function setupZipDownload (path?: string) {

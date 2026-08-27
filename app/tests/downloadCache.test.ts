@@ -16,7 +16,9 @@ vi.mock('os', async importOriginal => {
 
 vi.mock('../src/config/access', () => ({
   getConfigOption: (_key: string, fallback: unknown) => fallback,
-  getNumericConfigOption: (key: string, fallback: number) => config[key] ?? fallback
+  getNumericConfigOption: (key: string, fallback: number) => config[key] ?? fallback,
+  getNumericEnvConfigOption: (environmentName: string, key: string, fallback: number) =>
+    config[environmentName] ?? config[key] ?? fallback
 }))
 
 const { downloadAssets } = await import('../src/stream/download')
@@ -121,6 +123,24 @@ describe('resumable ZIP cache', () => {
 
     expect(result.statusCode).toBe(413)
     expect(result.body().toString()).toContain('ZIP exceeds configured size limit')
+    expect(await fs.readdir(TEST_TMP)).toEqual([])
+  })
+
+  it('preserves the configured disk budget before creating staging files', async () => {
+    config['ipp.maxDownloadZipBytes'] = 100
+    config['ipp.minDownloadZipFreeBytes'] = 0
+    config.IPP_ZIP_DISK_BUDGET_PERCENT = 50
+    vi.spyOn(fs, 'statfs').mockResolvedValue({ bavail: 300, bsize: 1 } as never)
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+    const assets = [asset('budgeted')]
+    const result = new FakeResponse()
+
+    await downloadAssets(response(result), share(assets), assets)
+
+    expect(result.statusCode).toBe(507)
+    expect(result.body().toString()).toContain('Insufficient staging space')
+    expect(fetchMock).not.toHaveBeenCalled()
     expect(await fs.readdir(TEST_TMP)).toEqual([])
   })
 })

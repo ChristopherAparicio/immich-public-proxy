@@ -85,9 +85,11 @@ Maximum number of assets IPP will fetch from your Immich server in parallel when
 
 Bulk downloads are prepared as immutable STORE archives before they are sent.
 This provides an exact `Content-Length`, supports HTTP byte ranges, and lets a
-mobile browser resume while the private cache is valid. One ZIP lifecycle is
-active at a time and additional visitors wait in a bounded, process-local FIFO.
-Queue state is intentionally lost on restart.
+mobile browser resume while the private cache is valid. Before preparation, IPP
+plans the selected download sizes. Small albums continue automatically; large
+albums are offered as deterministic independent parts. One archive is prepared
+at a time, ready/download transfers are bounded, and additional visitors wait
+in a process-local FIFO. Queue state is intentionally lost on restart.
 
 ### `maxDownloadZipBytes`
 
@@ -101,8 +103,67 @@ that crosses the ceiling fails with HTTP 413 before any ZIP bytes are sent.
 **Type:** `int` · **Default:** `5368709120` (5 GiB)
 
 Free-space reserve that must remain available on the filesystem backing
-`TMPDIR`. The preflight also reserves worst-case room for both staged originals
-and the final archive. Insufficient capacity returns HTTP 507.
+`TMPDIR`. Insufficient capacity returns HTTP 507.
+
+### `downloadZipDiskBudgetPercent`
+
+**Type:** `int` · **Default:** `50` · **Environment:** `IPP_ZIP_DISK_BUDGET_PERCENT`
+
+Percentage of free space remaining after `minDownloadZipFreeBytes` that one
+preparation may use. The preflight accounts for both staged source files and
+the final STORE archive, including a conservative per-entry metadata allowance.
+Values are clamped to 10–90.
+
+### `downloadZipSplitThresholdBytes`
+
+**Type:** `int` · **Default:** `1073741824` (1 GiB) · **Environment:** `IPP_ZIP_SPLIT_THRESHOLD_BYTES`
+
+Albums at or below this exact planned source size continue as one ZIP. Larger
+albums display a part picker before any file body is staged.
+
+### `downloadZipPartTargetBytes`
+
+**Type:** `int` · **Default:** `536870912` (512 MiB) · **Environment:** `IPP_ZIP_PART_TARGET_BYTES`
+
+Target source size for deterministic parts. An individual asset is never split,
+so a part may exceed the target by that asset's size but never the hard
+`maxDownloadZipBytes` ceiling.
+
+### `downloadZipPlanConcurrency`
+
+**Type:** `int` · **Default:** `12` · **Environment:** `IPP_ZIP_PLAN_CONCURRENCY`
+
+Maximum concurrent upstream header requests used to determine exact selected
+download sizes. Values are clamped to 1–32; response bodies are cancelled.
+
+### `downloadZipPlanTtlSeconds`
+
+**Type:** `int` · **Default:** `3600`
+
+Lifetime of an opaque, visitor-bound multipart plan. A new plan for the same
+visitor and share replaces the previous one.
+
+### `downloadZipMaxParts`
+
+**Type:** `int` · **Default:** `64`
+
+Maximum number of deterministic ZIP parts accepted for one album plan.
+
+### `downloadZipPlanMaxAssets`
+
+**Type:** `int` · **Default:** `5000`
+
+Maximum number of unique assets accepted in one album plan. Values are clamped
+to 1–20,000; the process also caps the total number of retained plan asset
+references so public sessions cannot grow memory without bound.
+
+### `downloadZipMaxParallelDownloads`
+
+**Type:** `int` · **Default:** `2` · **Environment:** `IPP_ZIP_MAX_PARALLEL_DOWNLOADS`
+
+Maximum number of prepared jobs that may be ready or transferring concurrently.
+Only one new archive is prepared at a time. Values are clamped to 1–8 and the
+reverse proxy should enforce the same or a stricter connection limit.
 
 ### `downloadZipCacheTtlSeconds`
 
@@ -115,8 +176,8 @@ expiry, and are swept after an unclean restart.
 
 **Type:** `int` · **Default:** `3`
 
-Maximum number of waiting jobs in addition to the active lifecycle. Requests
-beyond this bound receive HTTP 429.
+Maximum number of waiting jobs in addition to retained ready/downloading jobs.
+Requests beyond this bound receive HTTP 429.
 
 ### `downloadZipQueueHeartbeatSeconds`
 
@@ -135,7 +196,7 @@ preparation completes.
 
 **Type:** `int` · **Default:** `300`
 
-Absolute maximum time a prepared job may retain the active queue slot. HEAD,
+Absolute maximum time a prepared job may retain one ready slot. HEAD,
 Range and interrupted-transfer retries receive a short retry window but can
 never extend this deadline.
 

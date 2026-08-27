@@ -20,16 +20,20 @@ never merges code, creates a tag, publishes an image, or deploys anything.
 
 ## Fork delta
 
-- One active ZIP lifecycle with a bounded, process-local FIFO.
+- Deterministic server-side album planning with automatic small ZIPs and a
+  mobile part picker for larger albums.
+- One active preparation, bounded parallel transfers and a process-local FIFO.
 - Visitor-bound opaque job identifiers and explicit prepare/status/file routes.
 - English mobile dialog for queued, preparing, ready, failed and cancelled states.
 - Disk-backed immutable ZIP cache with exact length and byte-range support.
-- Aggregate source-size ceiling, free-space reserve and automatic cleanup.
+- Aggregate source-size ceiling, percentage disk budget, free-space reserve and
+  automatic cleanup.
 - One non-terminal job per visitor, an absolute retry deadline, and bounded
   lightweight terminal status retention.
 - Share-key log redaction and an exact-version AGPL source offer in the UI.
 - Legacy direct ZIP endpoints disabled by default.
-- Regression tests for queue isolation, FIFO ordering, size limits and resume.
+- Regression tests for plan isolation, deterministic parts, queue fairness,
+  bounded concurrency, disk budget, size limits and resume.
 
 The supported topology is one application replica. See
 [`docs/zip-downloads.md`](./docs/zip-downloads.md) before deployment.

@@ -26,3 +26,21 @@ export function getNumericConfigOption (path: string, defaultOption: number): nu
   const value = Number(getConfigOption(path, defaultOption))
   return Number.isFinite(value) ? value : defaultOption
 }
+
+/**
+ * Read a numeric environment override before falling back to config.json.
+ * Resource limits are deployment concerns, so operators can tune them without
+ * rebuilding or mutating the read-only application configuration mount.
+ */
+export function getNumericEnvConfigOption (
+  environmentName: string,
+  path: string,
+  defaultOption: number
+): number {
+  const raw = process.env[environmentName]
+  if (raw !== undefined && raw.trim() !== '') {
+    const value = Number(raw)
+    if (Number.isFinite(value)) return value
+  }
+  return getNumericConfigOption(path, defaultOption)
+}

@@ -2,8 +2,14 @@ import crypto from 'crypto'
 import { Writable } from 'stream'
 import type { Response } from 'express-serve-static-core'
 import type { Asset, SharedLink } from './types'
-import { getNumericConfigOption } from './config/access'
-import { downloadAssets, type DownloadProgress } from './stream/download'
+import { getNumericConfigOption, getNumericEnvConfigOption } from './config/access'
+import {
+  downloadAssets,
+  estimateDownloadAssets,
+  type DownloadOptions,
+  type DownloadProgress,
+  type EstimatedDownloadAsset
+} from './stream/download'
 import { log } from './utils/log'
 
 export type ZipJobState =
@@ -23,6 +29,22 @@ export interface ZipJobStatus {
   totalItems?: number
   sizeBytes?: number
   message?: string
+  partIndex?: number
+  partCount?: number
+}
+
+export interface ZipPlanPartStatus {
+  index: number
+  assetCount: number
+  sizeBytes: number
+}
+
+export interface ZipPlanStatus {
+  id: string
+  totalItems: number
+  totalBytes: number
+  requiresSplit: boolean
+  parts: ZipPlanPartStatus[]
 }
 
 type ZipJob = {
@@ -44,6 +66,17 @@ type ZipJob = {
   readyDeadline?: number
   terminalAt?: number
   leaveRequested?: boolean
+  maxBytes?: number
+  part?: { index: number, total: number }
+}
+
+type ZipPlan = ZipPlanStatus & {
+  scope: string
+  visitorId: string
+  signature: string
+  share: SharedLink
+  assetParts: EstimatedDownloadAsset[][]
+  expiresAt: number
 }
 
 /** Raised when the bounded in-memory waiting list has no free entry. */
@@ -62,8 +95,17 @@ export class ZipVisitorBusyError extends Error {
   }
 }
 
+export class ZipPlanUnavailableError extends Error {
+  constructor (message = 'This album cannot be divided into safe ZIP parts') {
+    super(message)
+    this.name = 'ZipPlanUnavailableError'
+  }
+}
+
 const TERMINAL_RETENTION_MS = 5 * 60_000
 const MAX_TERMINAL_JOBS = 64
+const MAX_PLANS = 32
+const MAX_PLANNED_ASSET_REFS = 20_000
 
 /**
  * Minimal writable response used to prepare the immutable ZIP cache without
@@ -138,18 +180,165 @@ function safeMessageForStatus (status: number): string {
  */
 export class ZipDownloadQueue {
   private readonly jobs = new Map<string, ZipJob>()
+  private readonly plans = new Map<string, ZipPlan>()
   private readonly waiting: string[] = []
-  private activeId?: string
+  private preparingId?: string
   private readonly sweepTimer: NodeJS.Timeout
   private readonly download: typeof downloadAssets
+  private readonly estimate: typeof estimateDownloadAssets
 
-  constructor (download: typeof downloadAssets = downloadAssets) {
+  constructor (
+    download: typeof downloadAssets = downloadAssets,
+    estimate: typeof estimateDownloadAssets = estimateDownloadAssets
+  ) {
     this.download = download
+    this.estimate = estimate
     this.sweepTimer = setInterval(() => this.sweep(), 10_000)
     this.sweepTimer.unref()
   }
 
-  enqueue (scope: string, visitorId: string, share: SharedLink, assets: Asset[]): ZipJobStatus {
+  async plan (
+    scope: string,
+    visitorId: string,
+    share: SharedLink,
+    assets: Asset[]
+  ): Promise<ZipPlanStatus> {
+    this.sweep()
+    const signature = assetSignature(assets)
+    const existingPlan = [...this.plans.values()].find(plan =>
+      plan.scope === scope &&
+      plan.visitorId === visitorId &&
+      plan.signature === signature &&
+      plan.expiresAt > Date.now()
+    )
+    if (existingPlan) return this.publicPlan(existingPlan)
+    if ([...this.jobs.values()].some(job => job.visitorId === visitorId && !this.isTerminal(job))) {
+      throw new ZipVisitorBusyError()
+    }
+    const maxPlanAssets = Math.max(1, Math.min(20_000, Math.floor(getNumericConfigOption(
+      'ipp.downloadZipPlanMaxAssets',
+      5000
+    ))))
+    if (assets.length < 1 || assets.length > maxPlanAssets || new Set(assets.map(asset => asset.id)).size !== assets.length) {
+      throw new ZipPlanUnavailableError('This album has too many or invalid assets for safe ZIP planning.')
+    }
+    const estimated = await this.estimate(share, assets)
+    if (estimated.length !== assets.length || estimated.some(item =>
+      !assets.includes(item.asset) || !Number.isSafeInteger(item.sizeBytes) || item.sizeBytes <= 0
+    )) {
+      throw new ZipPlanUnavailableError()
+    }
+    const hardMaxBytes = Math.max(1, Math.floor(getNumericConfigOption(
+      'ipp.maxDownloadZipBytes',
+      2147483648
+    )))
+    const splitThresholdBytes = Math.max(1, Math.min(hardMaxBytes, Math.floor(getNumericEnvConfigOption(
+      'IPP_ZIP_SPLIT_THRESHOLD_BYTES',
+      'ipp.downloadZipSplitThresholdBytes',
+      1073741824
+    ))))
+    const targetPartBytes = Math.max(1, Math.min(hardMaxBytes, Math.floor(getNumericEnvConfigOption(
+      'IPP_ZIP_PART_TARGET_BYTES',
+      'ipp.downloadZipPartTargetBytes',
+      536870912
+    ))))
+    const maxParts = Math.max(1, Math.min(256, Math.floor(getNumericConfigOption(
+      'ipp.downloadZipMaxParts',
+      64
+    ))))
+    const ordered = [...estimated].sort((left, right) => {
+      const byDate = String(left.asset.fileCreatedAt || '').localeCompare(String(right.asset.fileCreatedAt || ''))
+      return byDate || left.asset.id.localeCompare(right.asset.id)
+    })
+    if (ordered.some(item => item.sizeBytes > hardMaxBytes)) {
+      throw new ZipPlanUnavailableError('An individual asset exceeds the hard ZIP ceiling and must be downloaded separately.')
+    }
+    const totalBytes = ordered.reduce((sum, item) => sum + item.sizeBytes, 0)
+    if (!Number.isSafeInteger(totalBytes) || totalBytes <= 0) {
+      throw new ZipPlanUnavailableError()
+    }
+
+    const assetParts: EstimatedDownloadAsset[][] = []
+    if (totalBytes <= splitThresholdBytes) {
+      assetParts.push(ordered)
+    } else {
+      let current: EstimatedDownloadAsset[] = []
+      let currentBytes = 0
+      for (const item of ordered) {
+        if (current.length > 0 && currentBytes + item.sizeBytes > targetPartBytes) {
+          assetParts.push(current)
+          current = []
+          currentBytes = 0
+        }
+        current.push(item)
+        currentBytes += item.sizeBytes
+      }
+      if (current.length > 0) assetParts.push(current)
+    }
+    if (assetParts.length > maxParts) {
+      throw new ZipPlanUnavailableError('This album would require too many ZIP parts.')
+    }
+
+    // One current plan per visitor and share prevents cheap repeated planning
+    // from retaining multiple copies of a large asset graph.
+    for (const [id, plan] of this.plans) {
+      if (plan.scope === scope && plan.visitorId === visitorId) this.plans.delete(id)
+    }
+    const id = crypto.randomBytes(18).toString('base64url')
+    const parts = assetParts.map((part, index) => ({
+      index: index + 1,
+      assetCount: part.length,
+      sizeBytes: part.reduce((sum, item) => sum + item.sizeBytes, 0)
+    }))
+    const plan: ZipPlan = {
+      id,
+      scope,
+      visitorId,
+      signature,
+      share,
+      assetParts,
+      totalItems: ordered.length,
+      totalBytes,
+      requiresSplit: assetParts.length > 1,
+      parts,
+      expiresAt: Date.now() + Math.max(300, getNumericConfigOption(
+        'ipp.downloadZipPlanTtlSeconds',
+        3600
+      )) * 1000
+    }
+    this.plans.set(id, plan)
+    this.prunePlans()
+    return this.publicPlan(plan)
+  }
+
+  enqueuePart (
+    scope: string,
+    visitorId: string,
+    planId: string,
+    partIndex: number
+  ): ZipJobStatus | undefined {
+    this.sweep()
+    const plan = this.plans.get(planId)
+    if (!plan || plan.scope !== scope || plan.visitorId !== visitorId || plan.expiresAt <= Date.now()) {
+      return undefined
+    }
+    const estimated = plan.assetParts[partIndex - 1]
+    const publicPart = plan.parts[partIndex - 1]
+    if (!estimated || !publicPart) return undefined
+    const part = { index: partIndex, total: plan.assetParts.length }
+    return this.enqueue(scope, visitorId, plan.share, estimated.map(item => item.asset), {
+      maxBytes: publicPart.sizeBytes,
+      part
+    })
+  }
+
+  enqueue (
+    scope: string,
+    visitorId: string,
+    share: SharedLink,
+    assets: Asset[],
+    downloadOptions: DownloadOptions = {}
+  ): ZipJobStatus {
     this.sweep()
     const signature = assetSignature(assets)
     const visitorJob = [...this.jobs.values()].find(job =>
@@ -164,7 +353,8 @@ export class ZipDownloadQueue {
     }
 
     const maxWaiting = Math.max(1, getNumericConfigOption('ipp.downloadZipQueueMaxWaiting', 3))
-    if (this.activeId && this.waiting.length >= maxWaiting) throw new ZipQueueFullError()
+    const hasActiveWork = [...this.jobs.values()].some(job => !this.isTerminal(job))
+    if (hasActiveWork && this.waiting.length >= maxWaiting) throw new ZipQueueFullError()
 
     const now = Date.now()
     const job: ZipJob = {
@@ -178,7 +368,9 @@ export class ZipDownloadQueue {
       completedItems: 0,
       totalItems: assets.length,
       createdAt: now,
-      lastSeenAt: now
+      lastSeenAt: now,
+      maxBytes: downloadOptions.maxBytes,
+      part: downloadOptions.part
     }
     this.jobs.set(job.id, job)
     this.waiting.push(job.id)
@@ -219,12 +411,18 @@ export class ZipDownloadQueue {
     const job = this.authorizedJob(scope, visitorId, id)
     if (!job) return 'missing'
     job.lastSeenAt = Date.now()
-    if (this.activeId !== job.id || job.state !== 'ready') return 'busy'
+    if (job.state !== 'ready') return 'busy'
     if (!job.share || !job.assets) return 'missing'
+    const maxParallelDownloads = this.maxParallelDownloads()
+    const activeDownloads = [...this.jobs.values()].filter(candidate => candidate.state === 'downloading').length
+    if (activeDownloads >= maxParallelDownloads) return 'busy'
 
     job.state = 'downloading'
     try {
-      await this.download(res, job.share, job.assets)
+      await this.download(res, job.share, job.assets, undefined, {
+        maxBytes: job.maxBytes,
+        part: job.part
+      })
 
       // HEAD and Range requests may be followed by another request from Safari.
       // A disconnected full response also needs a short resume window. That
@@ -266,16 +464,40 @@ export class ZipDownloadQueue {
     if (job.phase) result.phase = job.phase
     if (job.sizeBytes !== undefined) result.sizeBytes = job.sizeBytes
     if (job.message) result.message = job.message
+    if (job.part) {
+      result.partIndex = job.part.index
+      result.partCount = job.part.total
+    }
     return result
   }
 
+  private publicPlan (plan: ZipPlan): ZipPlanStatus {
+    return {
+      id: plan.id,
+      totalItems: plan.totalItems,
+      totalBytes: plan.totalBytes,
+      requiresSplit: plan.requiresSplit,
+      parts: plan.parts.map(part => ({ ...part }))
+    }
+  }
+
+  private maxParallelDownloads () {
+    return Math.max(1, Math.min(8, Math.floor(getNumericEnvConfigOption(
+      'IPP_ZIP_MAX_PARALLEL_DOWNLOADS',
+      'ipp.downloadZipMaxParallelDownloads',
+      2
+    ))))
+  }
+
   private pump () {
-    if (this.activeId) return
+    if (this.preparingId) return
+    const retainedSlots = [...this.jobs.values()].filter(job => job.state === 'ready' || job.state === 'downloading').length
+    if (retainedSlots >= this.maxParallelDownloads()) return
     while (this.waiting.length > 0) {
       const id = this.waiting.shift()!
       const job = this.jobs.get(id)
       if (!job || job.state !== 'queued') continue
-      this.activeId = id
+      this.preparingId = id
       job.state = 'preparing'
       job.phase = 'fetching'
       this.prepare(job).catch(error => {
@@ -298,7 +520,10 @@ export class ZipDownloadQueue {
       job.completedItems = progress.completedItems
       job.totalItems = progress.totalItems
     }
-    await this.download(response as unknown as Response, job.share, job.assets, onProgress)
+    await this.download(response as unknown as Response, job.share, job.assets, onProgress, {
+      maxBytes: job.maxBytes,
+      part: job.part
+    })
 
     if (job.leaveRequested || job.state === 'cancelled') {
       job.state = 'cancelled'
@@ -328,11 +553,13 @@ export class ZipDownloadQueue {
     )
     job.readyUntil = now + readyLeaseSeconds * 1000
     job.readyDeadline = now + maxReadyLeaseSeconds * 1000
+    if (this.preparingId === job.id) this.preparingId = undefined
+    queueMicrotask(() => this.pump())
   }
 
   private finish (job: ZipJob, state: Extract<ZipJobState, 'complete' | 'failed' | 'cancelled'>) {
     job.state = state
-    if (this.activeId === job.id) this.activeId = undefined
+    if (this.preparingId === job.id) this.preparingId = undefined
     this.removeWaiting(job.id)
     // Terminal status remains briefly available to the browser, but discard
     // the potentially large share graph immediately and cap tombstones.
@@ -340,6 +567,7 @@ export class ZipDownloadQueue {
     job.assets = undefined
     job.readyUntil = undefined
     job.readyDeadline = undefined
+    job.maxBytes = undefined
     job.terminalAt = Date.now()
     this.pruneTerminalJobs()
     queueMicrotask(() => this.pump())
@@ -356,6 +584,26 @@ export class ZipDownloadQueue {
     while (terminal.length > MAX_TERMINAL_JOBS) {
       const oldest = terminal.shift()
       if (oldest) this.jobs.delete(oldest.id)
+    }
+  }
+
+  private prunePlans () {
+    const now = Date.now()
+    for (const [id, plan] of this.plans) {
+      if (plan.expiresAt <= now) this.plans.delete(id)
+    }
+    while (this.plans.size > MAX_PLANS) {
+      const oldest = this.plans.keys().next().value as string | undefined
+      if (!oldest) break
+      this.plans.delete(oldest)
+    }
+    let retainedAssetRefs = [...this.plans.values()].reduce((sum, plan) => sum + plan.totalItems, 0)
+    while (retainedAssetRefs > MAX_PLANNED_ASSET_REFS) {
+      const oldest = this.plans.keys().next().value as string | undefined
+      if (!oldest) break
+      const plan = this.plans.get(oldest)
+      this.plans.delete(oldest)
+      retainedAssetRefs -= plan?.totalItems || 0
     }
   }
 
@@ -385,6 +633,7 @@ export class ZipDownloadQueue {
         this.jobs.delete(job.id)
       }
     }
+    this.prunePlans()
     this.pump()
   }
 }

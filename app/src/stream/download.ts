@@ -1,7 +1,7 @@
 import { assetFetchUrl, authHeadersForAsset } from '../immich'
 import { Response } from 'express-serve-static-core'
 import { Asset, SharedLink } from '../types'
-import { getNumericConfigOption } from '../config/access'
+import { getNumericConfigOption, getNumericEnvConfigOption } from '../config/access'
 import { log } from '../utils/log'
 import archiver, { Archiver } from 'archiver'
 import { sanitize } from '../utils/sanitize'
@@ -34,6 +34,18 @@ export type DownloadProgress = {
   totalItems: number
 }
 
+export type DownloadOptions = {
+  /** Server-computed source-byte ceiling for this immutable part. */
+  maxBytes?: number
+  /** Human-readable suffix used only for a server-computed multipart plan. */
+  part?: { index: number, total: number }
+}
+
+export type EstimatedDownloadAsset = {
+  asset: Asset
+  sizeBytes: number
+}
+
 /**
  * Download all assets in a share as a zip file.
  */
@@ -43,6 +55,39 @@ export async function downloadAll (
   onProgress?: (progress: DownloadProgress) => void
 ) {
   await downloadAssets(res, share, share.assets, onProgress)
+}
+
+/**
+ * Fetch only the selected download endpoint headers for each asset. This is
+ * substantially cheaper than staging bodies and gives the planner the exact
+ * Content-Length for the quality/transcode IPP will actually serve.
+ */
+export async function estimateDownloadAssets (
+  share: SharedLink,
+  assets: Asset[]
+): Promise<EstimatedDownloadAsset[]> {
+  const concurrency = Math.max(1, Math.min(32, Math.floor(getNumericEnvConfigOption(
+    'IPP_ZIP_PLAN_CONCURRENCY',
+    'ipp.downloadZipPlanConcurrency',
+    12
+  ))))
+  const limit = createLimiter(concurrency)
+  return await Promise.all(assets.map(asset => limit(async () => {
+    const endpoint = resolveDownloadEndpoint(asset, share.allowDownload !== false)
+    const url = assetFetchUrl(asset, endpoint.subpath, endpoint.sizeQueryParam)
+    const headers = await authHeadersForAsset(asset)
+    const controller = new AbortController()
+    const fetched = await fetchHeadersWithRetry(url, headers, 2, 20_000, controller.signal, asset)
+    if (!fetched || 'failure' in fetched) {
+      throw new Error('Unable to determine an asset size for ZIP planning')
+    }
+    const sizeBytes = Number(fetched.response.headers.get('content-length'))
+    await fetched.response.body?.cancel().catch(() => { /* best effort */ })
+    if (!Number.isSafeInteger(sizeBytes) || sizeBytes <= 0) {
+      throw new Error('An asset has no usable Content-Length for ZIP planning')
+    }
+    return { asset, sizeBytes }
+  })))
 }
 
 /**
@@ -117,12 +162,24 @@ export async function downloadAssets (
   res: Response,
   share: SharedLink,
   assets: Asset[],
-  onProgress?: (progress: DownloadProgress) => void
+  onProgress?: (progress: DownloadProgress) => void,
+  downloadOptions: DownloadOptions = {}
 ) {
-  const maxBytes = Math.max(1, getNumericConfigOption('ipp.maxDownloadZipBytes', 2147483648))
+  const configuredMaxBytes = Math.max(1, getNumericConfigOption('ipp.maxDownloadZipBytes', 2147483648))
+  const requestedMaxBytes = Number(downloadOptions.maxBytes)
+  const maxBytes = Number.isSafeInteger(requestedMaxBytes) && requestedMaxBytes > 0
+    ? Math.min(configuredMaxBytes, requestedMaxBytes)
+    : configuredMaxBytes
   const minFreeBytes = Math.max(0, getNumericConfigOption('ipp.minDownloadZipFreeBytes', 5368709120))
   const cacheTtlMs = Math.max(60, getNumericConfigOption('ipp.downloadZipCacheTtlSeconds', 1800)) * 1000
-  let filename = (sanitize(title(share)) || 'photos') + '.zip'
+  const partSuffix = downloadOptions.part &&
+    Number.isSafeInteger(downloadOptions.part.index) &&
+    Number.isSafeInteger(downloadOptions.part.total) &&
+    downloadOptions.part.index >= 1 &&
+    downloadOptions.part.total >= downloadOptions.part.index
+    ? ` - part ${downloadOptions.part.index} of ${downloadOptions.part.total}`
+    : ''
+  let filename = (sanitize(title(share)) || 'photos') + partSuffix + '.zip'
   filename = encodeURI(filename)
 
   const cachePath = zipCachePath(share, assets)
@@ -137,8 +194,19 @@ export async function downloadAssets (
 
   const disk = await fs.statfs(tmpdir())
   const availableBytes = Number(disk.bavail) * Number(disk.bsize)
-  // Worst case while building: staged originals + final STORE archive.
-  if (availableBytes < (2 * maxBytes) + minFreeBytes) {
+  const budgetPercent = Math.max(10, Math.min(90, getNumericEnvConfigOption(
+    'IPP_ZIP_DISK_BUDGET_PERCENT',
+    'ipp.downloadZipDiskBudgetPercent',
+    50
+  )))
+  const usableAfterReserve = Math.max(0, availableBytes - minFreeBytes)
+  const zipBudgetBytes = Math.floor(usableAfterReserve * budgetPercent / 100)
+  const archiveOverheadBytes = 1024 * 1024 + assets.length * 4096
+  // Worst case while building: staged originals + final STORE archive. The
+  // fixed/per-entry allowance also covers ZIP metadata and filename overhead.
+  // The operator-controlled percentage prevents ZIP work from consuming the
+  // rest of a small VPS even when the filesystem itself reports free space.
+  if (zipBudgetBytes < 2 * maxBytes + archiveOverheadBytes) {
     res.status(507).type('text/plain').send('Insufficient staging space for ZIP download')
     return
   }

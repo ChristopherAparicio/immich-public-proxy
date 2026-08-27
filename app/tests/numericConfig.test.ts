@@ -1,6 +1,6 @@
 import { describe, it, expect, afterEach } from 'vitest'
 import { loadConfig } from '../src/config/loader'
-import { getNumericConfigOption } from '../src/config/access'
+import { getNumericConfigOption, getNumericEnvConfigOption } from '../src/config/access'
 import { createLimiter } from '../src/utils/limiter'
 
 /*
@@ -17,6 +17,7 @@ function loadConfigFrom (config: Record<string, unknown>) {
 
 afterEach(() => {
   delete process.env.CONFIG
+  delete process.env.IPP_TEST_NUMERIC
   loadConfig()
 })
 
@@ -44,6 +45,20 @@ describe('getNumericConfigOption', () => {
   it('falls back to the default when the option is unset', () => {
     loadConfigFrom({})
     expect(getNumericConfigOption('ipp.downloadFromImmichConcurrencyLimit', 20)).toBe(20)
+  })
+})
+
+describe('getNumericEnvConfigOption', () => {
+  it('prefers a finite environment override', () => {
+    loadConfigFrom({ ipp: { testNumeric: 25 } })
+    process.env.IPP_TEST_NUMERIC = '50'
+    expect(getNumericEnvConfigOption('IPP_TEST_NUMERIC', 'ipp.testNumeric', 10)).toBe(50)
+  })
+
+  it('falls back to JSON configuration for an invalid override', () => {
+    loadConfigFrom({ ipp: { testNumeric: 25 } })
+    process.env.IPP_TEST_NUMERIC = 'not-a-number'
+    expect(getNumericEnvConfigOption('IPP_TEST_NUMERIC', 'ipp.testNumeric', 10)).toBe(25)
   })
 })
 
