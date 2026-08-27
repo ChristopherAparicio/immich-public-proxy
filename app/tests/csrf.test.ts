@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
+import { readFileSync } from 'fs'
 import type { NextFunction, Request, Response } from 'express-serve-static-core'
 import { ensureCsrfCookie, requireCsrf } from '../src/csrf'
 
@@ -37,6 +38,13 @@ function issuedToken (res: FakeResponse): string {
 }
 
 describe('CSRF protection', () => {
+  it('attaches the CSRF guard to every unsafe Express route', () => {
+    const source = readFileSync(new URL('../src/index.ts', import.meta.url), 'utf8')
+    const unsafeRoutes = source.split('\n').filter(line => /^app\.(post|put|patch|delete)\(/.test(line))
+    expect(unsafeRoutes.length).toBeGreaterThan(0)
+    for (const route of unsafeRoutes) expect(route).toContain('requireCsrf')
+  })
+
   it('issues an HMAC-authenticated, host-only double-submit cookie', () => {
     const res = response()
     const next = vi.fn() as NextFunction
