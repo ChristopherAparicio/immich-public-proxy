@@ -371,7 +371,7 @@ app.post('/:shareType(share|s)/:key/download', requireCsrf, decodeCookie, asyncH
  * state issues) and force a clean GET redirect.
  * See https://github.com/alangrainger/immich-public-proxy/pull/205
  */
-app.post('/:shareType(share|s)/:key/:mode(download)?', (req, res) => {
+app.post('/:shareType(share|s)/:key/:mode(download)?', requireCsrf, (req, res) => {
   const prefix = req.params.shareType === 's' ? '/s/' : '/share/'
   const suffix = req.params.mode === 'download' ? '/download' : ''
   res.redirect(303, prefix + encodeURIComponent(req.params.key) + suffix)
