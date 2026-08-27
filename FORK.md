@@ -25,6 +25,9 @@ never merges code, creates a tag, publishes an image, or deploys anything.
 - English mobile dialog for queued, preparing, ready, failed and cancelled states.
 - Disk-backed immutable ZIP cache with exact length and byte-range support.
 - Aggregate source-size ceiling, free-space reserve and automatic cleanup.
+- One non-terminal job per visitor, an absolute retry deadline, and bounded
+  lightweight terminal status retention.
+- Share-key log redaction and an exact-version AGPL source offer in the UI.
 - Legacy direct ZIP endpoints disabled by default.
 - Regression tests for queue isolation, FIFO ordering, size limits and resume.
 

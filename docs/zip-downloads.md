@@ -10,7 +10,8 @@
    configured ceiling is crossed.
 5. Only after every source succeeds does IPP build an immutable STORE archive.
 6. The ready response exposes the exact size. A separate user click starts the
-   file response, which supports HEAD and one HTTP byte range.
+   file response, which supports HEAD and HTTP byte ranges within an absolute,
+   non-renewable ready deadline.
 7. The archive expires automatically. Stale staging paths and cache files are
    swept after restart.
 
@@ -32,6 +33,8 @@ would expose unnecessary capacity information.
 
 - A queue job is authorized by share access, scope, visitor session and an
   opaque 144-bit identifier.
+- One visitor session may own only one non-terminal job, independent of asset
+  selection or share scope.
 - Status responses do not expose other visitors, throughput or share details.
 - Invalid or unauthorized job access returns 404.
 - Cache files and partial archives are created privately and never become

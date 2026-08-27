@@ -39,7 +39,7 @@ server:
         main:
           image:
             repository: ghcr.io/christopheraparicio/immich-public-proxy
-            tag: 3.2.1-immich-share.2
+            tag: 3.2.1-immich-share.3
             pullPolicy: IfNotPresent
           env:
             IMMICH_URL: https://your-immich-url.com // You could also reference the service here

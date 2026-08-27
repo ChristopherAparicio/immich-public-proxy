@@ -3,6 +3,7 @@ import { ThemeScript } from './theme'
 import { GalleryItem, LightboxConfig, MetadataConfig, GroupByDateMode } from '../shared/types'
 import { ASSET_VERSION } from '../version'
 import { jsonForInlineScript } from '../utils/text'
+import { SourceOffer } from './sourceOffer'
 
 export type { GalleryItem, LightboxConfig, MetadataConfig, GroupByDateMode }
 
@@ -115,6 +116,7 @@ export function Gallery (props: GalleryProps) {
 {/* Container is intentionally empty - web.js's virtualisation manager
             populates it with only the tiles within the viewport buffer. */}
         <div id="gallery"></div>
+        <SourceOffer/>
         {props.showDownloadZip && (
           <div id="select-toolbar" hidden>
             <button id="select-cancel" class="toolbar-btn" type="button" aria-label="Exit selection mode">
