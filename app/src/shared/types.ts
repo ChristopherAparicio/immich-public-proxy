@@ -107,4 +107,5 @@ export interface InitParams {
   metadataConfig?: MetadataConfig
   groupByDate?: GroupByDateMode | false
   metaBase?: string
+  downloadPath?: string
 }

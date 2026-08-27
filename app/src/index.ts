@@ -17,6 +17,7 @@ import { buildAssetMetadata } from './gallery/metadata'
 import crypto from 'crypto'
 import { assetBuffer } from './stream/asset'
 import { downloadAssets, sweepStaleStagingDirs } from './stream/download'
+import { zipDownloadQueue, ZipQueueFullError } from './downloadQueue'
 import dayjs from 'dayjs'
 import { NextFunction, Request, Response } from 'express-serve-static-core'
 import { Asset, AssetType, ImageSize, KeyType, SharedLink } from './types'
@@ -149,12 +150,137 @@ app.get(/^(|\/share)\/healthcheck$/, asyncHandler(async (_req, res) => {
 }))
 
 /*
+ * ZIP preparation queue. A random visitor id is kept inside the encrypted,
+ * signed cookie-session payload so a job cannot be observed or downloaded by
+ * another browser even if its opaque id is disclosed.
+ */
+function zipVisitorId (req: Request): string {
+  const existing = String(req.session?.zipVisitorId || '')
+  if (/^[A-Za-z0-9_-]{20,64}$/.test(existing)) return existing
+  const id = crypto.randomBytes(18).toString('base64url')
+  if (req.session) req.session.zipVisitorId = id
+  return id
+}
+
+function zipScope (req: Request, keyType: KeyType): string {
+  return keyType + ':' + req.params.key
+}
+
+function validZipJobId (value: string): boolean {
+  return /^[A-Za-z0-9_-]{24}$/.test(value)
+}
+
+function selectedZipAssets (req: Request, share: SharedLink): Asset[] | null {
+  if (req.body?.assets === undefined) return share.assets
+  if (!Array.isArray(req.body.assets) || req.body.assets.length < 2) return null
+  const ids = new Set(req.body.assets.map(String))
+  if (ids.size !== req.body.assets.length) return null
+  const selected = share.assets.filter(asset => ids.has(asset.id))
+  return selected.length === ids.size ? selected : null
+}
+
+app.post('/:shareType(share|s)/:key/download/prepare', decodeCookie, asyncHandler(async (req, res) => {
+  res.set('Cache-Control', 'private, no-store')
+  const keyType = getKeyTypeFromShare(req.params.shareType)
+  const resolved = await resolveShare(req, keyType)
+  if (!resolved.ok || !canDownload(resolved.link)) {
+    res.status(404).json({ state: 'failed', message: 'ZIP request unavailable.' })
+    return
+  }
+  const assets = selectedZipAssets(req, resolved.link)
+  if (!assets) {
+    res.status(400).json({ state: 'failed', message: 'Invalid asset selection.' })
+    return
+  }
+  try {
+    const status = zipDownloadQueue.enqueue(
+      zipScope(req, keyType),
+      zipVisitorId(req),
+      resolved.link,
+      assets
+    )
+    res.status(202).json(status)
+  } catch (error) {
+    if (error instanceof ZipQueueFullError) {
+      res.set('Retry-After', '30')
+      res.status(429).json({ state: 'failed', message: 'The download queue is full. Please try again later.' })
+      return
+    }
+    throw error
+  }
+}))
+
+app.get('/:shareType(share|s)/:key/download/jobs/:jobId', decodeCookie, asyncHandler(async (req, res) => {
+  res.set('Cache-Control', 'private, no-store')
+  if (!validZipJobId(req.params.jobId)) {
+    res.status(404).json({ state: 'cancelled' })
+    return
+  }
+  const keyType = getKeyTypeFromShare(req.params.shareType)
+  const resolved = await resolveShare(req, keyType)
+  if (!resolved.ok || !canDownload(resolved.link)) {
+    res.status(404).json({ state: 'cancelled' })
+    return
+  }
+  const status = zipDownloadQueue.get(zipScope(req, keyType), zipVisitorId(req), req.params.jobId)
+  if (!status) {
+    res.status(404).json({ state: 'cancelled' })
+    return
+  }
+  res.json(status)
+}))
+
+app.delete('/:shareType(share|s)/:key/download/jobs/:jobId', decodeCookie, asyncHandler(async (req, res) => {
+  res.set('Cache-Control', 'private, no-store')
+  if (!validZipJobId(req.params.jobId)) {
+    res.status(404).send()
+    return
+  }
+  const keyType = getKeyTypeFromShare(req.params.shareType)
+  const resolved = await resolveShare(req, keyType)
+  if (!resolved.ok || !canDownload(resolved.link)) {
+    res.status(404).send()
+    return
+  }
+  const cancelled = zipDownloadQueue.cancel(zipScope(req, keyType), zipVisitorId(req), req.params.jobId)
+  res.status(cancelled ? 204 : 409).send()
+}))
+
+app.get('/:shareType(share|s)/:key/download/jobs/:jobId/file', decodeCookie, asyncHandler(async (req, res) => {
+  res.set('Cache-Control', 'private, no-store')
+  if (!validZipJobId(req.params.jobId)) {
+    res.status(404).send()
+    return
+  }
+  const keyType = getKeyTypeFromShare(req.params.shareType)
+  const resolved = await resolveShare(req, keyType)
+  if (!resolved.ok || !canDownload(resolved.link)) {
+    res.status(404).send()
+    return
+  }
+  const outcome = await zipDownloadQueue.stream(
+    zipScope(req, keyType),
+    zipVisitorId(req),
+    req.params.jobId,
+    res,
+    { head: req.method === 'HEAD', range: !!req.headers.range }
+  )
+  if (outcome === 'missing') res.status(404).send()
+  if (outcome === 'busy') {
+    res.set('Retry-After', '30')
+    res.status(429).send('ZIP download is not ready')
+  }
+}))
+
+/*
  * [ROUTE] This is the main URL that someone would visit if they are opening a shared link
  */
 app.get('/:shareType(share|s)/:key/:mode(download)?', decodeCookie, asyncHandler(async (req, res) => {
   const keyType = getKeyTypeFromShare(req.params.shareType)
 
-  if (keyType === KeyType.slug && !getConfigOption('ipp.allowSlugLinks', true)) {
+  if (req.params.mode === 'download' && !getConfigOption('ipp.allowLegacyDirectZipDownload', false)) {
+    res.status(409).type('text/plain').send('Direct ZIP downloads are disabled; use the gallery download queue')
+  } else if (keyType === KeyType.slug && !getConfigOption('ipp.allowSlugLinks', true)) {
     // Slug type links are not allowed
     respondToInvalidRequest(res, 404, 'Slug links are disabled in config.json')
   } else {
@@ -194,6 +320,10 @@ app.post('/share/unlock', asyncHandler(async (req, res) => {
  * outside the share.
  */
 app.post('/:shareType(share|s)/:key/download', decodeCookie, asyncHandler(async (req, res) => {
+  if (!getConfigOption('ipp.allowLegacyDirectZipDownload', false)) {
+    res.status(409).type('text/plain').send('Direct ZIP downloads are disabled; use the gallery download queue')
+    return
+  }
   const keyType = getKeyTypeFromShare(req.params.shareType)
   let requestedIds: unknown
   try {

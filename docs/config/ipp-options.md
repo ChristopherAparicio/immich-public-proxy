@@ -77,9 +77,68 @@ The bulk-zip and per-asset buttons can be toggled independently once downloads a
 
 ## `downloadFromImmichConcurrencyLimit`
 
-**Type:** `int` · **Default:** `20`
+**Type:** `int` · **Default:** `3`
 
 Maximum number of assets IPP will fetch from your Immich server in parallel when building a "download all" zip. Lower this if your Immich server is slow or you see download timeouts on large albums; raise it for faster downloads if your server can handle the load.
+
+## Resumable ZIP downloads
+
+Bulk downloads are prepared as immutable STORE archives before they are sent.
+This provides an exact `Content-Length`, supports HTTP byte ranges, and lets a
+mobile browser resume while the private cache is valid. One ZIP lifecycle is
+active at a time and additional visitors wait in a bounded, process-local FIFO.
+Queue state is intentionally lost on restart.
+
+### `maxDownloadZipBytes`
+
+**Type:** `int` · **Default:** `2147483648` (2 GiB)
+
+Maximum aggregate number of source bytes accepted for one archive. A request
+that crosses the ceiling fails with HTTP 413 before any ZIP bytes are sent.
+
+### `minDownloadZipFreeBytes`
+
+**Type:** `int` · **Default:** `5368709120` (5 GiB)
+
+Free-space reserve that must remain available on the filesystem backing
+`TMPDIR`. The preflight also reserves worst-case room for both staged originals
+and the final archive. Insufficient capacity returns HTTP 507.
+
+### `downloadZipCacheTtlSeconds`
+
+**Type:** `int` · **Default:** `1800`
+
+Lifetime of a prepared private ZIP. Cache files are mode `0600`, are removed on
+expiry, and are swept after an unclean restart.
+
+### `downloadZipQueueMaxWaiting`
+
+**Type:** `int` · **Default:** `3`
+
+Maximum number of waiting jobs in addition to the active lifecycle. Requests
+beyond this bound receive HTTP 429.
+
+### `downloadZipQueueHeartbeatSeconds`
+
+**Type:** `int` · **Default:** `300`
+
+Maximum time a queued browser may stop polling before its job is discarded.
+
+### `downloadZipReadyLeaseSeconds`
+
+**Type:** `int` · **Default:** `120`
+
+Time reserved for the visitor to press the explicit download button after ZIP
+preparation completes.
+
+### `allowLegacyDirectZipDownload`
+
+**Type:** `bool` · **Default:** `false`
+
+Re-enable the historical direct `GET/POST .../download` endpoints. Leave this
+disabled on public deployments: these endpoints bypass the application queue
+and exist only as a temporary compatibility escape hatch. The gallery itself
+uses the queued endpoints.
 
 ## `allowSlugLinks`
 

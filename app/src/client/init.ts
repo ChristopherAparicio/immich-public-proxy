@@ -12,6 +12,7 @@ import { state } from './state.js'
 import { setupToolbar } from './selection.js'
 import { initLightbox, openLightbox } from './lightbox.js'
 import { computeLayoutAndRender, onScroll } from './virtualisation.js'
+import { setupZipDownload } from './downloadQueue.js'
 
 function readInitParams (): InitParams {
   const el = document.getElementById('ipp-init')
@@ -29,6 +30,7 @@ function init () {
   state.container = document.getElementById('gallery')
   if (!state.container) return
 
+  setupZipDownload(params.downloadPath)
   setupToolbar()
   initLightbox()
 

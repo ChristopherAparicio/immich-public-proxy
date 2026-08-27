@@ -3,6 +3,7 @@
 // zip, or downloaded directly for a single selection.
 
 import { state } from './state.js'
+import { startZipDownload } from './downloadQueue.js'
 
 /**
  * Activate selection mode. Tiles show their checkmark control, the bottom
@@ -94,18 +95,7 @@ function downloadSelected () {
       return
     }
   }
-  // Form POST so the browser handles streaming the zip directly to disk.
-  const form = document.createElement('form')
-  form.method = 'POST'
-  form.action = window.location.pathname + '/download'
-  const input = document.createElement('input')
-  input.type = 'hidden'
-  input.name = 'assets'
-  input.value = JSON.stringify(Array.from(state.selected))
-  form.appendChild(input)
-  document.body.appendChild(form)
-  form.submit()
-  form.remove()
+  startZipDownload(Array.from(state.selected))
 }
 
 /**

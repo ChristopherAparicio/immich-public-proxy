@@ -32,7 +32,8 @@ export function Gallery (props: GalleryProps) {
     lightboxConfig: props.lightboxConfig,
     metadataConfig: props.metadataConfig,
     groupByDate: props.groupByDate,
-    metaBase: props.metaBase
+    metaBase: props.metaBase,
+    downloadPath: props.showDownloadZip ? props.path + '/download' : undefined
   })
   const firstItem = props.items[0]
   // og:image prefers the album cover (passed via props); for videos, previewUrl
@@ -85,13 +86,28 @@ export function Gallery (props: GalleryProps) {
               </div>
             )}
             {props.showDownloadZip && (
-              <a id="download-all" href={props.path + '/download'} title="Download all" aria-label="Download all">
+              <a id="download-all" href={props.path + '/download'} download="" title="Download all" aria-label="Download all" data-state="idle">
                 <svg viewBox="0 0 24 24" aria-hidden="true">
                   <path fill="currentColor" d="M5,20H19V18H5M19,9H15V3H9V9H5L12,16L19,9Z"/>
                 </svg>
               </a>
             )}
           </header>
+        )}
+        {props.showDownloadZip && (
+          <dialog id="zip-dialog" aria-labelledby="zip-dialog-title">
+            <div class="zip-dialog-card">
+              <h2 id="zip-dialog-title">Preparing your ZIP…</h2>
+              <p id="zip-dialog-message" aria-live="polite">Please wait.</p>
+              <progress id="zip-progress"></progress>
+              <p id="zip-dialog-detail" class="zip-dialog-detail"></p>
+              <div class="zip-dialog-actions">
+                <button id="zip-leave" class="zip-secondary" type="button" hidden>Leave queue</button>
+                <button id="zip-close" class="zip-secondary" type="button">Close</button>
+                <button id="zip-action" type="button" hidden>Download ZIP</button>
+              </div>
+            </div>
+          </dialog>
         )}
         {props.description && (
           <p id="album-description">{props.description}</p>

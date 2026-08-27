@@ -26,13 +26,15 @@ afterAll(async () => {
   await fs.rm(TEST_TMP, { recursive: true, force: true })
 })
 
-afterEach(() => {
+afterEach(async () => {
   vi.unstubAllGlobals()
+  const entries = await fs.readdir(TEST_TMP).catch(() => [] as string[])
+  await Promise.all(entries.map(name => fs.rm(`${TEST_TMP}/${name}`, { recursive: true, force: true })))
 })
 
 async function stagingDirs (): Promise<string[]> {
   const entries = await fs.readdir(TEST_TMP).catch(() => [] as string[])
-  return entries.filter(name => name.startsWith('ipp-zip-'))
+  return entries.filter(name => name.startsWith('ipp-zip-') && !name.startsWith('ipp-zip-cache-'))
 }
 
 function makeAsset (id: string): Asset {
@@ -62,6 +64,8 @@ setters downloadAssets calls.
 */
 class FakeRes extends Writable {
   received = 0
+  statusCode = 200
+  req = { headers: {}, method: 'GET' }
 
   constructor () {
     super()

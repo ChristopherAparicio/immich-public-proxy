@@ -1,6 +1,6 @@
 {
   "name": "immich-public-proxy",
-  "version": "3.2.1",
+  "version": "3.2.1-immich-share.1",
   "scripts": {
     "dev": "concurrently -n server,client -c blue,green \"tsx watch src/index.ts\" \"tsc -w -p tsconfig.client.json\"",
     "build": "tsc && tsc -p tsconfig.client.json",
@@ -16,7 +16,7 @@
   "description": "Share your Immich photos and albums in a safe way without exposing your Immich instance to the public.",
   "repository": {
     "type": "git",
-    "url": "https://github.com/alangrainger/immich-public-proxy.git"
+    "url": "https://github.com/ChristopherAparicio/immich-public-proxy.git"
   },
   "main": "dist/index.js",
   "bin": "dist/index.js",

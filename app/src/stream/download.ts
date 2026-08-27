@@ -5,9 +5,10 @@ import { getNumericConfigOption } from '../config/access'
 import { log } from '../utils/log'
 import archiver, { Archiver } from 'archiver'
 import { sanitize } from '../utils/sanitize'
-import { Readable } from 'stream'
-import { pipeline } from 'stream/promises'
-import { promises as fs, createWriteStream } from 'fs'
+import crypto from 'crypto'
+import { Readable, Transform } from 'stream'
+import { finished, pipeline } from 'stream/promises'
+import { promises as fs, createReadStream, createWriteStream, Stats } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { resolveDownloadEndpoint, ImageEndpoint } from '../gallery/sizing'
@@ -17,12 +18,30 @@ import { createLimiter } from '../utils/limiter'
 import { createIdleTimeoutStream } from '../utils/idleTimeoutStream'
 
 const STAGING_DIR_PREFIX = 'ipp-zip-'
+const ZIP_CACHE_PREFIX = 'ipp-zip-cache-'
+
+class ZipSizeLimitError extends Error {
+  constructor (maxBytes: number) {
+    super(`ZIP exceeds configured limit of ${maxBytes} bytes`)
+    this.name = 'ZipSizeLimitError'
+  }
+}
+
+export type DownloadProgress = {
+  phase: 'fetching' | 'finalizing'
+  completedItems: number
+  totalItems: number
+}
 
 /**
  * Download all assets in a share as a zip file.
  */
-export async function downloadAll (res: Response, share: SharedLink) {
-  await downloadAssets(res, share, share.assets)
+export async function downloadAll (
+  res: Response,
+  share: SharedLink,
+  onProgress?: (progress: DownloadProgress) => void
+) {
+  await downloadAssets(res, share, share.assets, onProgress)
 }
 
 /**
@@ -36,14 +55,21 @@ export async function downloadAll (res: Response, share: SharedLink) {
 export async function sweepStaleStagingDirs (maxAgeMs = 60 * 60 * 1000) {
   const root = tmpdir()
   const cutoff = Date.now() - maxAgeMs
+  const cacheMaxAgeMs = Math.max(60, getNumericConfigOption('ipp.downloadZipCacheTtlSeconds', 1800)) * 1000
+  const cacheCutoff = Date.now() - cacheMaxAgeMs
   const entries = await fs.readdir(root).catch(() => [] as string[])
   for (const name of entries) {
-    if (!name.startsWith(STAGING_DIR_PREFIX)) continue
+    if (!name.startsWith(STAGING_DIR_PREFIX) && !name.startsWith(ZIP_CACHE_PREFIX)) continue
     const path = join(root, name)
     const stat = await fs.stat(path).catch(() => null)
-    if (!stat || stat.mtimeMs >= cutoff) continue
+    if (!stat) continue
+    if (name.startsWith(ZIP_CACHE_PREFIX) && stat.mtimeMs >= cacheCutoff) {
+      scheduleZipCacheDeletion(path, Math.max(1, stat.mtimeMs + cacheMaxAgeMs - Date.now()))
+      continue
+    }
+    if (!name.startsWith(ZIP_CACHE_PREFIX) && stat.mtimeMs >= cutoff) continue
     await fs.rm(path, { recursive: true, force: true }).catch(e => {
-      log.warn(`Failed to sweep stale staging dir ${path}: ${e instanceof Error ? e.message : String(e)}`)
+      log.warn(`Failed to sweep stale ZIP path ${path}: ${e instanceof Error ? e.message : String(e)}`)
     })
   }
 }
@@ -55,6 +81,10 @@ type StageOutcome = StagedAsset | { failure: Failure } | null
 type StagingOptions = {
   stagingDir: string
   concurrency: number
+  maxBytes: number
+  byteCounter: { value: number }
+  cachePath: string
+  partialPath: string
   maxAttempts: number
   headerTimeoutMs: number
   idleTimeoutMs: number
@@ -82,21 +112,47 @@ type StagingOptions = {
  * The only thing we share with Immich here is using zip STORE (no
  * compression), since photos and videos are already compressed.
  */
-export async function downloadAssets (res: Response, share: SharedLink, assets: Asset[]) {
-  res.setHeader('Content-Type', 'application/zip')
+export async function downloadAssets (
+  res: Response,
+  share: SharedLink,
+  assets: Asset[],
+  onProgress?: (progress: DownloadProgress) => void
+) {
+  const maxBytes = Math.max(1, getNumericConfigOption('ipp.maxDownloadZipBytes', 2147483648))
+  const minFreeBytes = Math.max(0, getNumericConfigOption('ipp.minDownloadZipFreeBytes', 5368709120))
+  const cacheTtlMs = Math.max(60, getNumericConfigOption('ipp.downloadZipCacheTtlSeconds', 1800)) * 1000
   let filename = (sanitize(title(share)) || 'photos') + '.zip'
   filename = encodeURI(filename)
-  res.setHeader('Content-Disposition', `attachment; filename*=UTF-8''${filename}`)
-  // Hint to intermediate proxies (Nginx, etc.) not to buffer this response.
-  res.setHeader('X-Accel-Buffering', 'no')
+
+  const cachePath = zipCachePath(share, assets)
+  const cached = await validCachedZip(cachePath, cacheTtlMs)
+  if (cached) {
+    scheduleZipCacheDeletion(cachePath, Math.max(1, cached.mtimeMs + cacheTtlMs - Date.now()))
+    const completed = await serveZipFile(res, cachePath, filename, cached)
+    if (!completed) log(`Cached zip download for share ${share.key} cancelled by client`)
+    return
+  }
+  await fs.rm(cachePath, { force: true }).catch(() => { /* best effort */ })
+
+  const disk = await fs.statfs(tmpdir())
+  const availableBytes = Number(disk.bavail) * Number(disk.bsize)
+  // Worst case while building: staged originals + final STORE archive.
+  if (availableBytes < (2 * maxBytes) + minFreeBytes) {
+    res.status(507).type('text/plain').send('Insufficient staging space for ZIP download')
+    return
+  }
+
   const archive = archiver('zip', { store: true })
   // Without a listener, an archiver 'error' emission would crash the process.
   archive.on('error', e => log(`Archiver error for share ${share.key}: ${e.message}`))
-  archive.pipe(res)
 
   const options: StagingOptions = {
     stagingDir: await fs.mkdtemp(join(tmpdir(), STAGING_DIR_PREFIX)),
     concurrency: Math.max(1, getNumericConfigOption('ipp.downloadFromImmichConcurrencyLimit', 20)),
+    maxBytes,
+    byteCounter: { value: 0 },
+    cachePath,
+    partialPath: cachePath + '.part-' + process.pid + '-' + crypto.randomUUID(),
     maxAttempts: 3,
     headerTimeoutMs: 20_000,
     idleTimeoutMs: 20_000
@@ -104,18 +160,16 @@ export async function downloadAssets (res: Response, share: SharedLink, assets: 
 
   const controller = new AbortController()
   let clientGone = false
-  let resolveClosed!: () => void
-  const resClosed = new Promise<void>(resolve => { resolveClosed = resolve })
+  let cacheReady = false
   res.once('close', () => {
     if (res.writableFinished) return
     clientGone = true
     controller.abort()
-    resolveClosed()
   })
 
   try {
     const stages = stageAssetsToDisk(share, assets, options, controller.signal)
-    const failure = await archiveStaged(archive, stages, controller)
+    const failure = await archiveStaged(archive, stages, controller, onProgress, assets.length)
     if (clientGone) {
       log(`Zip download for share ${share.key} cancelled by client`)
       archive.abort()
@@ -125,21 +179,32 @@ export async function downloadAssets (res: Response, share: SharedLink, assets: 
       abortDownload(archive, res, share, failure)
       return
     }
-    // finalize() resolves when archiver has finished writing the zip output,
-    // which means every queued tempfile has been read. Safe to delete after.
-    // Raced against client disconnect because finalize() never settles once
-    // the response is destroyed. The inline rejection handler also stops a
-    // late finalize failure becoming an unhandled rejection after a lost race.
-    const finished = archive.finalize().then(() => 'done' as const, () => 'error' as const)
-    const outcome = await Promise.race([finished, resClosed.then(() => 'closed' as const)])
-    if (outcome !== 'done') {
-      if (outcome === 'closed') log(`Zip download for share ${share.key} cancelled by client`)
-      // 'error' was already logged by the archiver error listener
+
+    // Build an immutable archive first. This gives clients an exact
+    // Content-Length and makes a later Range retry possible.
+    const output = createWriteStream(options.partialPath, { flags: 'wx', mode: 0o600 })
+    archive.pipe(output)
+    try {
+      await Promise.all([archive.finalize(), finished(output)])
+      await fs.rename(options.partialPath, options.cachePath)
+      cacheReady = true
+      scheduleZipCacheDeletion(options.cachePath, cacheTtlMs)
+    } catch (error) {
       archive.abort()
-      res.destroy()
+      if (!clientGone && !res.headersSent) res.status(503).type('text/plain').send('ZIP creation failed')
+      return
     }
+
+    const cacheStat = await fs.stat(options.cachePath)
+    if (clientGone) {
+      log(`Zip cache prepared for share ${share.key} after client disconnected`)
+      return
+    }
+    const completed = await serveZipFile(res, options.cachePath, filename, cacheStat)
+    if (!completed) log(`Zip download for share ${share.key} cancelled by client; cached archive retained`)
   } finally {
     await fs.rm(options.stagingDir, { recursive: true, force: true }).catch(() => { /* best effort */ })
+    if (!cacheReady) await fs.rm(options.partialPath, { force: true }).catch(() => { /* best effort */ })
   }
 }
 
@@ -160,8 +225,15 @@ function stageAssetsToDisk (share: SharedLink, assets: Asset[], options: Staging
  * caller. We wait for in-flight stages to settle before returning so the
  * staging dir is safe to delete.
  */
-async function archiveStaged (archive: Archiver, stages: Promise<StageOutcome>[], controller: AbortController): Promise<Failure | null> {
+async function archiveStaged (
+  archive: Archiver,
+  stages: Promise<StageOutcome>[],
+  controller: AbortController,
+  onProgress?: (progress: DownloadProgress) => void,
+  totalItems = stages.length
+): Promise<Failure | null> {
   let failure: Failure | null = null
+  const completed: StagedAsset[] = []
   for (const stage of stages) {
     const result = await stage
     if (result === null) break // aborted by an earlier stage
@@ -170,14 +242,21 @@ async function archiveStaged (archive: Archiver, stages: Promise<StageOutcome>[]
       failure = result.failure
       break
     }
-    // archive.file queues the entry; archiver lazily opens and reads it.
-    archive.file(result.tempfile, { name: getFilename(result.asset, result.endpoint.servedSize, result.servedMime) })
+    completed.push(result)
+    onProgress?.({ phase: 'fetching', completedItems: completed.length, totalItems })
   }
 
   // After abort, wait for any in-flight stages to settle before we delete
   // the staging dir. stageOne never rejects (errors become failure objects),
   // so a plain Promise.all is safe.
   if (controller.signal.aborted) await Promise.all(stages)
+  if (!failure) {
+    onProgress?.({ phase: 'finalizing', completedItems: completed.length, totalItems })
+    for (const result of completed) {
+      // Queue entries only after every asset has passed the aggregate limit.
+      archive.file(result.tempfile, { name: getFilename(result.asset, result.endpoint.servedSize, result.servedMime) })
+    }
+  }
   return failure
 }
 
@@ -187,7 +266,93 @@ function abortDownload (archive: Archiver, res: Response, share: SharedLink, fai
     : (failure.error instanceof Error ? failure.error.message : String(failure.error))
   log(`Aborting zip download for share ${share.key}: failed to fetch asset ${failure.asset.id} from ${failure.url} (${detail})`)
   archive.abort()
+  if (failure.error instanceof ZipSizeLimitError && !res.headersSent) {
+    res.removeHeader('Content-Disposition')
+    res.status(413).type('text/plain').send('ZIP exceeds configured size limit')
+    return
+  }
   res.destroy()
+}
+
+function zipCachePath (share: SharedLink, assets: Asset[]): string {
+  const hash = crypto.createHash('sha256')
+  hash.update(String(share.key))
+  hash.update('\0')
+  for (const id of assets.map(asset => String(asset.id)).sort()) {
+    hash.update(id)
+    hash.update('\0')
+  }
+  return join(tmpdir(), ZIP_CACHE_PREFIX + hash.digest('hex') + '.zip')
+}
+
+async function validCachedZip (path: string, maxAgeMs: number): Promise<Stats | null> {
+  const stat = await fs.stat(path).catch(() => null)
+  if (!stat || !stat.isFile() || stat.size <= 0 || stat.mtimeMs + maxAgeMs <= Date.now()) return null
+  return stat
+}
+
+function scheduleZipCacheDeletion (path: string, delayMs: number) {
+  const timer = setTimeout(() => {
+    fs.rm(path, { force: true }).catch(() => { /* best effort */ })
+  }, delayMs)
+  timer.unref()
+}
+
+async function serveZipFile (res: Response, path: string, filename: string, stat: Stats): Promise<boolean> {
+  const size = stat.size
+  const rangeHeader = String(res.req?.headers?.range || '')
+  let start = 0
+  let end = size - 1
+  let partial = false
+
+  if (rangeHeader) {
+    const match = /^bytes=(\d*)-(\d*)$/.exec(rangeHeader.trim())
+    if (!match || (!match[1] && !match[2])) {
+      res.status(416).setHeader('Content-Range', `bytes */${size}`)
+      res.end()
+      return true
+    }
+    if (!match[1]) {
+      const suffix = Number(match[2])
+      if (!Number.isSafeInteger(suffix) || suffix <= 0) {
+        res.status(416).setHeader('Content-Range', `bytes */${size}`)
+        res.end()
+        return true
+      }
+      start = Math.max(0, size - suffix)
+    } else {
+      start = Number(match[1])
+      if (match[2]) end = Number(match[2])
+    }
+    if (!Number.isSafeInteger(start) || !Number.isSafeInteger(end) || start < 0 || start >= size || end < start) {
+      res.status(416).setHeader('Content-Range', `bytes */${size}`)
+      res.end()
+      return true
+    }
+    end = Math.min(end, size - 1)
+    partial = true
+  }
+
+  res.statusCode = partial ? 206 : 200
+  res.setHeader('Content-Type', 'application/zip')
+  res.setHeader('Content-Disposition', `attachment; filename*=UTF-8''${filename}`)
+  res.setHeader('Content-Length', String(end - start + 1))
+  res.setHeader('Accept-Ranges', 'bytes')
+  res.setHeader('Cache-Control', 'private, no-store')
+  res.setHeader('X-Accel-Buffering', 'no')
+  if (partial) res.setHeader('Content-Range', `bytes ${start}-${end}/${size}`)
+  if (res.req?.method === 'HEAD') {
+    res.end()
+    return true
+  }
+
+  try {
+    await pipeline(createReadStream(path, { start, end }), res)
+    return true
+  } catch (error) {
+    if (res.destroyed || res.closed) return false
+    throw error
+  }
 }
 
 /**
@@ -224,7 +389,13 @@ async function stageOne (share: SharedLink, asset: Asset, index: number, options
 
   // Use the array index in the path so we never collide on duplicate IDs.
   const tempfile = join(options.stagingDir, `${index}-${asset.id}`)
-  const streamed = await streamBodyToTempFile(fetched.response, tempfile, options.idleTimeoutMs)
+  const streamed = await streamBodyToTempFile(
+    fetched.response,
+    tempfile,
+    options.idleTimeoutMs,
+    options.byteCounter,
+    options.maxBytes
+  )
   if ('failure' in streamed) return { failure: { asset, url, error: streamed.failure } }
 
   return { tempfile, asset: stagedAsset, endpoint, servedMime }
@@ -329,7 +500,13 @@ async function fetchHeadersWithRetry (
  * idle stream destroys itself if no chunk arrives within `idleMs`, killing
  * the pipeline with a clear error.
  */
-async function streamBodyToTempFile (response: globalThis.Response, tempfile: string, idleMs: number): Promise<{ ok: true } | { failure: unknown }> {
+async function streamBodyToTempFile (
+  response: globalThis.Response,
+  tempfile: string,
+  idleMs: number,
+  byteCounter: { value: number },
+  maxBytes: number
+): Promise<{ ok: true } | { failure: unknown }> {
   if (!response.body) return { failure: new Error('Upstream response has no body') }
   // `response.body` is the global/undici ReadableStream<Uint8Array>;
   // Readable.fromWeb expects node:stream/web's ReadableStream<any>. The
@@ -337,8 +514,18 @@ async function streamBodyToTempFile (response: globalThis.Response, tempfile: st
   // distinct nominal types, so a cast is needed.
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const body = Readable.fromWeb(response.body as any)
+  const sizeGuard = new Transform({
+    transform (chunk: Buffer, _encoding, callback) {
+      byteCounter.value += chunk.length
+      if (byteCounter.value > maxBytes) {
+        callback(new ZipSizeLimitError(maxBytes))
+        return
+      }
+      callback(null, chunk)
+    }
+  })
   try {
-    await pipeline(body, createIdleTimeoutStream(idleMs), createWriteStream(tempfile))
+    await pipeline(body, createIdleTimeoutStream(idleMs), sizeGuard, createWriteStream(tempfile))
     return { ok: true }
   } catch (e) {
     return { failure: e }

@@ -546,3 +546,54 @@ html.ipp-sidebar-open .ipp-sidebar {
   opacity: 0.6;
   text-align: center;
 }
+
+
+/* immich-share ZIP queue dialog */
+#download-all { position: relative; }
+
+#download-all[data-state="queued"]::after,
+#download-all[data-state="preparing"]::after,
+#download-all[data-state="ready"]::after {
+  content: "";
+  position: absolute;
+  width: .55rem;
+  height: .55rem;
+  right: .2rem;
+  top: .2rem;
+  border-radius: 50%;
+  background: #f5a623;
+}
+
+#download-all[data-state="preparing"] svg {
+  animation: ipp-download-pulse 1.2s ease-in-out infinite;
+}
+
+#download-all[data-state="ready"]::after { background: #2ecc71; }
+
+@keyframes ipp-download-pulse {
+  0%, 100% { opacity: .35; }
+  50% { opacity: 1; }
+}
+
+#zip-dialog {
+  width: min(92vw, 30rem);
+  border: 0;
+  border-radius: 1rem;
+  padding: 0;
+  color: var(--color-fg, #111);
+  background: var(--color-bg, #fff);
+  box-shadow: 0 1.5rem 4rem rgb(0 0 0 / 35%);
+}
+
+#zip-dialog::backdrop {
+  background: rgb(0 0 0 / 55%);
+  backdrop-filter: blur(2px);
+}
+
+.zip-dialog-card { padding: 1.4rem; }
+.zip-dialog-card h2 { margin: 0 0 .75rem; font-size: 1.25rem; }
+.zip-dialog-card progress { width: 100%; margin: .75rem 0 .25rem; }
+.zip-dialog-detail { min-height: 1.5rem; opacity: .75; font-size: .9rem; }
+.zip-dialog-actions { display: flex; justify-content: flex-end; gap: .6rem; flex-wrap: wrap; margin-top: 1rem; }
+.zip-dialog-actions button { width: auto; margin: 0; }
+.zip-dialog-actions .zip-secondary { background: transparent; color: inherit; border: 1px solid currentColor; }
