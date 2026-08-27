@@ -2,6 +2,7 @@
 
 import 'dotenv/config'
 import express from 'express'
+import cookieSession from 'cookie-session'
 import {
   accessible,
   enforceMinimumImmichVersion,
@@ -32,7 +33,7 @@ import { h } from 'preact'
 import { renderPage } from './view/render'
 import { Home } from './view/home'
 import { ensureCsrfCookie, requireCsrf } from './csrf'
-import { installSession } from './session'
+import { configureTrustedProxy, sessionOptions } from './session'
 
 // Extend the Request type with a `password` property
 declare module 'express-serve-static-core' {
@@ -47,7 +48,13 @@ loadConfig()
 
 const app = express()
 const inProduction = process.env.NODE_ENV === 'production'
-installSession(app, crypto.randomBytes(32).toString('base64url'), inProduction)
+configureTrustedProxy(app, inProduction)
+app.use(cookieSession(sessionOptions(
+  crypto.randomBytes(32).toString('base64url'),
+  inProduction
+)))
+// Keep this ordering explicit for security review: the browser integrity token
+// is installed immediately after the signed session and before every route.
 app.use(ensureCsrfCookie)
 // For parsing the password unlock form and POSTed JSON payloads
 app.use(express.json())

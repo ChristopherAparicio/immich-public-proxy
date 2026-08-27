@@ -1,8 +1,9 @@
 import express from 'express'
+import cookieSession from 'cookie-session'
 import type { AddressInfo } from 'net'
 import type { Server } from 'http'
 import { afterEach, describe, expect, it } from 'vitest'
-import { installSession } from '../src/session'
+import { configureTrustedProxy, sessionOptions } from '../src/session'
 
 let server: Server | undefined
 
@@ -13,7 +14,8 @@ afterEach(async () => {
 
 async function requestSession (production: boolean, forwardedProto?: string): Promise<Response> {
   const app = express()
-  installSession(app, 'test-secret-at-least-32-characters', production)
+  configureTrustedProxy(app, production)
+  app.use(cookieSession(sessionOptions('test-secret-at-least-32-characters', production)))
   app.get('/', (req, res) => {
     if (req.session) req.session.authenticated = true
     res.sendStatus(204)
