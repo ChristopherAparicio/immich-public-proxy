@@ -27,7 +27,9 @@ jobs:
         with:
           node-version: '24.19.0'
           cache: npm
-          cache-dependency-path: app/package-lock.json
+          cache-dependency-path: |
+            app/package-lock.json
+            docs/package-lock.json
 
       - name: Install locked dependencies
         run: npm ci --include=dev --ignore-scripts
@@ -41,9 +43,21 @@ jobs:
         run: npm test
         working-directory: app
 
-      - name: Audit production dependencies
-        run: npm audit --omit=dev --audit-level=high
+      - name: Audit application dependencies
+        run: npm audit --audit-level=moderate
         working-directory: app
+
+      - name: Install locked documentation dependencies
+        run: npm ci --include=dev --ignore-scripts
+        working-directory: docs
+
+      - name: Audit documentation dependencies
+        run: npm audit --audit-level=moderate
+        working-directory: docs
+
+      - name: Build documentation
+        run: npm run build
+        working-directory: docs
 
       - name: Validate Compose
         run: docker compose config --quiet
