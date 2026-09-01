@@ -31,6 +31,8 @@ never merges code, creates a tag, publishes an image, or deploys anything.
 - One non-terminal job per visitor, an absolute retry deadline, and bounded
   lightweight terminal status retention.
 - Share-key log redaction and an exact-version AGPL source offer in the UI.
+- Opt-in one-scan password fragments that are cleared client-side before the
+  existing CSRF-protected unlock request and never enter the initial request URL.
 - Legacy direct ZIP endpoints disabled by default.
 - Regression tests for plan isolation, deterministic parts, queue fairness,
   bounded concurrency, disk budget, size limits and resume.

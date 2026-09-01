@@ -1,6 +1,6 @@
 services:
   immich-public-proxy:
-    image: ghcr.io/christopheraparicio/immich-public-proxy:3.2.1-immich-share.3
+    image: ghcr.io/christopheraparicio/immich-public-proxy:3.2.1-immich-share.6
     container_name: immich-public-proxy
     init: true
     restart: unless-stopped

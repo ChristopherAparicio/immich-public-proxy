@@ -166,6 +166,7 @@ export async function handleShareRequest (req: IncomingShareRequest, res: Respon
     res.header('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate')
     res.header('Pragma', 'no-cache')
     res.header('Expires', '0')
+    res.header('Referrer-Policy', 'no-referrer')
   }
 
   // Password required - show the visitor the password page
