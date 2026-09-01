@@ -1,49 +1,17 @@
 import { SourceOffer } from './sourceOffer'
+import { ASSET_VERSION } from '../version'
 
 interface PasswordProps {
   shareKey: string
   notifyInvalidPassword: boolean
 }
 
-const submitScript = `
-  function csrfToken () {
-    const prefix = 'ipp-csrf='
-    const part = document.cookie.split(';').map(value => value.trim()).find(value => value.startsWith(prefix))
-    if (!part) return ''
-    try { return decodeURIComponent(part.slice(prefix.length)) } catch (e) { return '' }
-  }
-
-  async function submitForm (formElement) {
-    const formData = new FormData(formElement)
-    try {
-      const res = await fetch('/share/unlock', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'X-IPP-CSRF-Token': csrfToken()
-        },
-        body: JSON.stringify(Object.fromEntries(formData.entries()))
-      })
-      if (res.status === 200) {
-        window.location.reload()
-      } else if (res.status === 403) {
-        window.location.reload()
-      }
-    } catch (e) { }
-  }
-
-  document.getElementById('unlock')
-    .addEventListener('submit', function (e) {
-      e.preventDefault()
-      submitForm(this)
-    })
-`
-
 export function Password ({ shareKey, notifyInvalidPassword }: PasswordProps) {
   return (
     <html lang="en">
       <head>
         <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
+        <meta name="referrer" content="no-referrer"/>
         <title>Password required</title>
         <link rel="icon" href="/share/static/favicon.ico" type="image/x-icon"/>
         <link type="text/css" rel="stylesheet" href="/share/static/pico.min.css"/>
@@ -80,7 +48,7 @@ export function Password ({ shareKey, notifyInvalidPassword }: PasswordProps) {
           </div>
         </main>
         <SourceOffer/>
-        <script dangerouslySetInnerHTML={{ __html: submitScript }}/>
+        <script type="module" src={`/share/static/${ASSET_VERSION}/js/client/password.js`}></script>
       </body>
     </html>
   )

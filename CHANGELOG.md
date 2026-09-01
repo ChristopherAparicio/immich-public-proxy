@@ -3,6 +3,21 @@
 All notable fork-specific changes are documented here. Upstream history and
 release notes remain available in the upstream repository.
 
+## 3.2.1-immich-share.6 — 2026-09-01
+
+### Added
+
+- Added opt-in one-scan unlock links whose password is carried only in the URL
+  fragment and submitted through the existing CSRF-protected unlock flow.
+
+### Security
+
+- Clear the credential fragment with `history.replaceState` before making the
+  unlock request and refuse malformed, duplicated or control-bearing values.
+- Apply `Referrer-Policy: no-referrer` to password-protected responses.
+- Moved password-page behaviour from an inline script to a versioned static
+  module and added fragment parsing and ordering regression tests.
+
 ## 3.2.1-immich-share.3 — 2026-08-27
 
 ### Security
