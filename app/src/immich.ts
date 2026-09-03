@@ -113,7 +113,7 @@ export async function request (endpoint: string, init?: RequestInit) {
       }
     } else {
       log('Immich API status ' + res.status)
-      console.log(await res.text())
+      log('Immich API response: ' + (await res.text()).slice(0, 500))
     }
   } catch (e) {
     log('Unable to reach Immich on ' + process.env.IMMICH_URL)
@@ -141,7 +141,7 @@ export async function handleShareRequest (req: IncomingShareRequest, res: Respon
 
   // Check that the key is a valid format
   if (!isKey(req.key)) {
-    respondToInvalidRequest(res, 404, 'Wrong key format ' + req.key)
+    respondToInvalidRequest(res, 404, 'Wrong key format')
     return
   }
 
@@ -181,7 +181,7 @@ export async function handleShareRequest (req: IncomingShareRequest, res: Respon
   }
 
   if (!sharedLinkRes.link) {
-    respondToInvalidRequest(res, 404, 'Unknown error with key ' + req.key)
+    respondToInvalidRequest(res, 404, 'Unknown error for shared link')
     return
   }
   const link = sharedLinkRes.link
@@ -655,7 +655,7 @@ export async function enforceMinimumImmichVersion (): Promise<void> {
     return
   }
   if (!isImmichVersionSupported(version)) {
-    console.error(dayjs().format() + ' FATAL: Immich server is version ' + formatVersion(version) + ', but IPP requires Immich ' + formatVersion(MIN_IMMICH_VERSION) + ' or newer.')
+    log.error('FATAL: Immich server is version ' + formatVersion(version) + ', but IPP requires Immich ' + formatVersion(MIN_IMMICH_VERSION) + ' or newer.')
     process.exit(1)
   }
 }

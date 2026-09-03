@@ -72,7 +72,6 @@ type ZipJob = {
 
 type ZipPlan = ZipPlanStatus & {
   scope: string
-  visitorId: string
   signature: string
   share: SharedLink
   assetParts: EstimatedDownloadAsset[][]
@@ -92,6 +91,14 @@ export class ZipVisitorBusyError extends Error {
   constructor () {
     super('A ZIP download is already active for this visitor')
     this.name = 'ZipVisitorBusyError'
+  }
+}
+
+/** Raised when the process-wide planning limit is already saturated. */
+export class ZipPlanBusyError extends Error {
+  constructor () {
+    super('Too many ZIP plans are being computed')
+    this.name = 'ZipPlanBusyError'
   }
 }
 
@@ -183,6 +190,8 @@ export class ZipDownloadQueue {
   private readonly plans = new Map<string, ZipPlan>()
   private readonly waiting: string[] = []
   private preparingId?: string
+  private readonly pendingPlans = new Map<string, Promise<ZipPlan>>()
+  private activePlans = 0
   private readonly sweepTimer: NodeJS.Timeout
   private readonly download: typeof downloadAssets
   private readonly estimate: typeof estimateDownloadAssets
@@ -205,13 +214,15 @@ export class ZipDownloadQueue {
   ): Promise<ZipPlanStatus> {
     this.sweep()
     const signature = assetSignature(assets)
-    const existingPlan = [...this.plans.values()].find(plan =>
-      plan.scope === scope &&
-      plan.visitorId === visitorId &&
-      plan.signature === signature &&
-      plan.expiresAt > Date.now()
-    )
+    // A plan holds only share-derived data (asset ids, sizes, part bounds), so
+    // one plan per (scope, signature) is shared by every visitor who can open
+    // the share; jobs created from it remain visitor-bound. Concurrent misses
+    // for the same album coalesce onto one estimation pass.
+    const existingPlan = this.findPlan(scope, signature)
     if (existingPlan) return this.publicPlan(existingPlan)
+    const pendingKey = scope + '\0' + signature
+    const pending = this.pendingPlans.get(pendingKey)
+    if (pending) return this.publicPlan(await pending)
     if ([...this.jobs.values()].some(job => job.visitorId === visitorId && !this.isTerminal(job))) {
       throw new ZipVisitorBusyError()
     }
@@ -222,6 +233,24 @@ export class ZipDownloadQueue {
     if (assets.length < 1 || assets.length > maxPlanAssets || new Set(assets.map(asset => asset.id)).size !== assets.length) {
       throw new ZipPlanUnavailableError('This album has too many or invalid assets for safe ZIP planning.')
     }
+    const maxInFlight = Math.max(1, Math.min(32, Math.floor(getNumericEnvConfigOption(
+      'IPP_ZIP_PLAN_MAX_IN_FLIGHT',
+      'ipp.downloadZipPlanMaxInFlight',
+      2
+    ))))
+    if (this.activePlans >= maxInFlight) throw new ZipPlanBusyError()
+    this.activePlans++
+    const planning = this.buildPlan(scope, signature, share, assets)
+    this.pendingPlans.set(pendingKey, planning)
+    try {
+      return this.publicPlan(await planning)
+    } finally {
+      this.activePlans--
+      this.pendingPlans.delete(pendingKey)
+    }
+  }
+
+  private async buildPlan (scope: string, signature: string, share: SharedLink, assets: Asset[]): Promise<ZipPlan> {
     const estimated = await this.estimate(share, assets)
     if (estimated.length !== assets.length || estimated.some(item =>
       !assets.includes(item.asset) || !Number.isSafeInteger(item.sizeBytes) || item.sizeBytes <= 0
@@ -279,10 +308,8 @@ export class ZipDownloadQueue {
       throw new ZipPlanUnavailableError('This album would require too many ZIP parts.')
     }
 
-    // One current plan per visitor and share prevents cheap repeated planning
-    // from retaining multiple copies of a large asset graph.
     for (const [id, plan] of this.plans) {
-      if (plan.scope === scope && plan.visitorId === visitorId) this.plans.delete(id)
+      if (plan.scope === scope && plan.signature === signature) this.plans.delete(id)
     }
     const id = crypto.randomBytes(18).toString('base64url')
     const parts = assetParts.map((part, index) => ({
@@ -293,7 +320,6 @@ export class ZipDownloadQueue {
     const plan: ZipPlan = {
       id,
       scope,
-      visitorId,
       signature,
       share,
       assetParts,
@@ -308,7 +334,7 @@ export class ZipDownloadQueue {
     }
     this.plans.set(id, plan)
     this.prunePlans()
-    return this.publicPlan(plan)
+    return plan
   }
 
   enqueuePart (
@@ -319,7 +345,7 @@ export class ZipDownloadQueue {
   ): ZipJobStatus | undefined {
     this.sweep()
     const plan = this.plans.get(planId)
-    if (!plan || plan.scope !== scope || plan.visitorId !== visitorId || plan.expiresAt <= Date.now()) {
+    if (!plan || plan.scope !== scope || plan.expiresAt <= Date.now()) {
       return undefined
     }
     const estimated = plan.assetParts[partIndex - 1]
@@ -471,6 +497,13 @@ export class ZipDownloadQueue {
     return result
   }
 
+  private findPlan (scope: string, signature: string): ZipPlan | undefined {
+    const now = Date.now()
+    return [...this.plans.values()].find(plan =>
+      plan.scope === scope && plan.signature === signature && plan.expiresAt > now
+    )
+  }
+
   private publicPlan (plan: ZipPlan): ZipPlanStatus {
     return {
       id: plan.id,
@@ -614,10 +647,12 @@ export class ZipDownloadQueue {
 
   private sweep () {
     const now = Date.now()
-    const staleQueuedMs = Math.max(
-      60,
-      getNumericConfigOption('ipp.downloadZipQueueHeartbeatSeconds', 300)
-    ) * 1000
+    // A browser that is still waiting polls every 2 s. A queued job that has
+    // not been polled within the poll window was abandoned (or was created by
+    // rotating cookies to fill the waiting list) and must release its entry.
+    const heartbeatMs = Math.max(60, getNumericConfigOption('ipp.downloadZipQueueHeartbeatSeconds', 300)) * 1000
+    const queuedPollMs = Math.max(5, getNumericConfigOption('ipp.downloadZipQueuedPollSeconds', 30)) * 1000
+    const staleQueuedMs = Math.min(heartbeatMs, queuedPollMs)
 
     for (const job of this.jobs.values()) {
       if (job.state === 'queued' && now - job.lastSeenAt > staleQueuedMs) {

@@ -19,6 +19,7 @@ import { assetBuffer } from './stream/asset'
 import { downloadAssets, sweepStaleStagingDirs } from './stream/download'
 import {
   zipDownloadQueue,
+  ZipPlanBusyError,
   ZipPlanUnavailableError,
   ZipQueueFullError,
   ZipVisitorBusyError
@@ -26,9 +27,9 @@ import {
 import dayjs from 'dayjs'
 import { NextFunction, Request, Response } from 'express-serve-static-core'
 import { Asset, AssetType, ImageSize, KeyType, SharedLink } from './types'
-import { getConfigOption } from './config/access'
+import { describeZipLimits, getConfigOption } from './config/access'
 import { loadConfig } from './config/loader'
-import { addResponseHeaders, asyncHandler, errorHandler } from './http'
+import { addResponseHeaders, asyncHandler, errorHandler, notFoundHandler } from './http'
 import { canDownload } from './share'
 import { toString } from './utils/text'
 import { decrypt, encrypt } from './encrypt'
@@ -38,7 +39,9 @@ import { h } from 'preact'
 import { renderPage } from './view/render'
 import { Home } from './view/home'
 import { ensureCsrfCookie, requireCsrf } from './csrf'
-import { configureTrustedProxy, sessionOptions } from './session'
+import { configureTrustedProxy, sessionOptions, unlockRequest } from './session'
+import { log } from './utils/log'
+import { describeError } from './utils/redact'
 
 // Extend the Request type with a `password` property
 declare module 'express-serve-static-core' {
@@ -48,8 +51,14 @@ declare module 'express-serve-static-core' {
 }
 
 // Read config.json (or the inline CONFIG env var) and apply backward-compat
-// migrations. Must run before any code that calls getConfigOption.
-loadConfig()
+// migrations. Must run before any code that calls getConfigOption. A broken
+// config is fatal: running on implicit defaults would silently widen limits.
+try {
+  loadConfig()
+} catch (error) {
+  log.error('FATAL: ' + (error instanceof Error ? error.message : String(error)))
+  process.exit(1)
+}
 
 const app = express()
 const inProduction = process.env.NODE_ENV === 'production'
@@ -214,6 +223,11 @@ app.post('/:shareType(share|s)/:key/download/plan', requireCsrf, decodeCookie, a
       res.status(429).json({ message: 'A ZIP request is already active in this browser.' })
       return
     }
+    if (error instanceof ZipPlanBusyError) {
+      res.set('Retry-After', '30')
+      res.status(429).json({ message: 'Too many albums are being analyzed right now. Please try again later.' })
+      return
+    }
     throw error
   }
 }))
@@ -360,9 +374,14 @@ app.get('/:shareType(share|s)/:key/:mode(download)?', decodeCookie, asyncHandler
  * user's browser in its encrypted state.
  */
 app.post('/share/unlock', requireCsrf, asyncHandler(async (req, res) => {
-  if (req.session && req.body.key) {
-    req.session[req.body.key] = encrypt(JSON.stringify({
-      password: req.body.password,
+  const unlock = unlockRequest(req.body)
+  if (!unlock) {
+    res.status(400).send()
+    return
+  }
+  if (req.session) {
+    req.session[unlock.key] = encrypt(JSON.stringify({
+      password: unlock.password,
       expires: dayjs().add(1, 'hour').format()
     }))
   }
@@ -509,11 +528,9 @@ if (getConfigOption('ipp.showHomePage', true)) {
 }
 
 /*
- * Send a 404 for all other routes
+ * Send a 404 for all other routes, whatever the method
  */
-app.get('*', (req, res) => {
-  respondToInvalidRequest(res, 404, 'Invalid route ' + req.path)
-})
+app.all('*', notFoundHandler)
 
 /*
  * Terminal error middleware: any throw/rejection inside a route (routed here
@@ -525,18 +542,18 @@ app.use(errorHandler)
 // Send the correct process error code for any uncaught exceptions
 // so that Docker can gracefully restart the container
 process.on('uncaughtException', (err) => {
-  console.error('There was an uncaught error', err)
+  log.error('There was an uncaught error: ' + describeError(err))
   server.close()
   process.exit(1)
 })
 // Log-only: with asyncHandler routing request errors into errorHandler, a
 // stray rejection from a background task (version check, staging-dir sweep,
 // etc.) is not worth killing every in-flight request for.
-process.on('unhandledRejection', (reason, promise) => {
-  console.error('Unhandled Rejection at:', promise, 'reason:', reason)
+process.on('unhandledRejection', (reason) => {
+  log.error('Unhandled rejection: ' + describeError(reason))
 })
 process.on('SIGTERM', () => {
-  console.log('Received SIGTERM. Gracefully shutting down...')
+  log('Received SIGTERM. Gracefully shutting down...')
   server.close()
   process.exit(0)
 })
@@ -544,12 +561,15 @@ process.on('SIGTERM', () => {
 // Start the ExpressJS server
 const port = Number(process.env.IPP_PORT) || 3000
 const server = app.listen(port, () => {
-  console.log(dayjs().format() + ' Server started on port ' + port)
+  log('Server started on port ' + port)
+  // Effective ZIP limits and which source (env override, config, default)
+  // supplied each one, so misconfiguration is visible in the first log lines.
+  log('ZIP limits: ' + describeZipLimits().join(', '))
   // Bail out early if the Immich server is older than IPP supports, rather
   // than silently serving broken album shares. Unknown/unreachable is
   // tolerated (logs a warning and continues) - see enforceMinimumImmichVersion.
-  enforceMinimumImmichVersion().catch(e => console.error('Immich version check failed:', e))
+  enforceMinimumImmichVersion().catch(e => log.error('Immich version check failed: ' + describeError(e)))
   // Clean up any zip-download staging dirs left behind by a previous
   // run that crashed before its finally block could run
-  sweepStaleStagingDirs().catch(e => console.error('sweepStaleStagingDirs failed:', e))
+  sweepStaleStagingDirs().catch(e => log.error('sweepStaleStagingDirs failed: ' + describeError(e)))
 })

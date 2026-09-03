@@ -3,6 +3,34 @@
 All notable fork-specific changes are documented here. Upstream history and
 release notes remain available in the upstream repository.
 
+## Unreleased
+
+### Security
+
+- Stream single-asset responses with backpressure, abort the upstream Immich
+  fetch when the client disconnects and bound header receipt to 20 s, so slow
+  or vanished readers can no longer buffer whole originals in memory.
+- Bounded ZIP planning process-wide: at most `downloadZipPlanMaxInFlight`
+  (`IPP_ZIP_PLAN_MAX_IN_FLIGHT`, default 2) albums are analysed at once,
+  planning probes share one global concurrency limiter, and an existing plan is
+  reused across visitors instead of re-probing Immich for every new cookie.
+- Queued ZIP jobs must be polled at least every `downloadZipQueuedPollSeconds`
+  (default 30) or are dropped, so rotating cookies cannot hold the waiting list
+  for the full heartbeat window.
+- Answer unknown routes uniformly for every HTTP method instead of Express's
+  default HTML page.
+- Validate `/share/unlock` input: the key must be a well-formed share key and
+  the password a string of at most 256 characters; anything else is a 400.
+- Fail closed on a malformed or unreadable configuration and log the effective
+  ZIP limits with their source (env, config, default) once at startup.
+- Release the staging file descriptor held by an aborted ZIP build (ported
+  from upstream #284): a cancelled or failed download no longer pins a deleted
+  tempfile on the VPS staging volume until restart.
+- Route the remaining raw `console` error paths through the redacting logger,
+  and scrub nested error causes and bare 40+ character credential-shaped tokens.
+- Percent-encode `Content-Disposition` filenames per RFC 5987 and add an ASCII
+  fallback so a share title cannot inject header parameters.
+
 ## 3.2.1-immich-share.6 — 2026-09-01
 
 ### Added
