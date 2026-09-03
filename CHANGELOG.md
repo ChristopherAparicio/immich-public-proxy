@@ -3,7 +3,7 @@
 All notable fork-specific changes are documented here. Upstream history and
 release notes remain available in the upstream repository.
 
-## Unreleased
+## 3.2.1-immich-share.7 — 2026-09-03
 
 ### Security
 
