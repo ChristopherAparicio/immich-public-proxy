@@ -27,7 +27,7 @@ const form = document.getElementById('unlock')
 if (form instanceof HTMLFormElement) {
   form.addEventListener('submit', event => {
     event.preventDefault()
-    void submitForm(form)
+    submitForm(form)
   })
 
   const fragment = readPasswordFragment(window.location.hash)
@@ -37,7 +37,7 @@ if (form instanceof HTMLFormElement) {
     // do not submit the fragment.
     try {
       window.history.replaceState(null, '', window.location.pathname + window.location.search)
-      if (fragment.password !== undefined) void submitForm(form, fragment.password)
+      if (fragment.password !== undefined) submitForm(form, fragment.password)
     } catch (e) { }
   }
 }

@@ -4,7 +4,7 @@ import { Asset, SharedLink } from '../types'
 import { getNumericConfigOption, getNumericEnvConfigOption } from '../config/access'
 import { log } from '../utils/log'
 import archiver, { Archiver } from 'archiver'
-import { sanitize } from '../utils/sanitize'
+import { contentDisposition, sanitize } from '../utils/sanitize'
 import crypto from 'crypto'
 import { Readable, Transform } from 'stream'
 import { finished, pipeline } from 'stream/promises'
@@ -57,6 +57,24 @@ export async function downloadAll (
   await downloadAssets(res, share, share.assets, onProgress)
 }
 
+/*
+ * One process-wide limiter for planning probes. A per-call limiter would let
+ * N concurrent plans issue N x concurrency requests against Immich.
+ */
+let planProbeLimiter: { concurrency: number, run: ReturnType<typeof createLimiter> } | undefined
+
+function planLimiter () {
+  const concurrency = Math.max(1, Math.min(32, Math.floor(getNumericEnvConfigOption(
+    'IPP_ZIP_PLAN_CONCURRENCY',
+    'ipp.downloadZipPlanConcurrency',
+    12
+  ))))
+  if (!planProbeLimiter || planProbeLimiter.concurrency !== concurrency) {
+    planProbeLimiter = { concurrency, run: createLimiter(concurrency) }
+  }
+  return planProbeLimiter.run
+}
+
 /**
  * Fetch only the selected download endpoint headers for each asset. This is
  * substantially cheaper than staging bodies and gives the planner the exact
@@ -66,12 +84,7 @@ export async function estimateDownloadAssets (
   share: SharedLink,
   assets: Asset[]
 ): Promise<EstimatedDownloadAsset[]> {
-  const concurrency = Math.max(1, Math.min(32, Math.floor(getNumericEnvConfigOption(
-    'IPP_ZIP_PLAN_CONCURRENCY',
-    'ipp.downloadZipPlanConcurrency',
-    12
-  ))))
-  const limit = createLimiter(concurrency)
+  const limit = planLimiter()
   return await Promise.all(assets.map(asset => limit(async () => {
     const endpoint = resolveDownloadEndpoint(asset, share.allowDownload !== false)
     const url = assetFetchUrl(asset, endpoint.subpath, endpoint.sizeQueryParam)
@@ -179,8 +192,7 @@ export async function downloadAssets (
     downloadOptions.part.total >= downloadOptions.part.index
     ? ` - part ${downloadOptions.part.index} of ${downloadOptions.part.total}`
     : ''
-  let filename = (sanitize(title(share)) || 'photos') + partSuffix + '.zip'
-  filename = encodeURI(filename)
+  const filename = (sanitize(title(share)) || 'photos') + partSuffix + '.zip'
 
   const cachePath = zipCachePath(share, assets)
   const cached = await validCachedZip(cachePath, cacheTtlMs)
@@ -241,7 +253,7 @@ export async function downloadAssets (
     const failure = await archiveStaged(archive, stages, controller, onProgress, assets.length)
     if (clientGone) {
       log('ZIP download cancelled by client')
-      archive.abort()
+      teardownArchive(archive)
       return
     }
     if (failure) {
@@ -259,7 +271,7 @@ export async function downloadAssets (
       cacheReady = true
       scheduleZipCacheDeletion(options.cachePath, cacheTtlMs)
     } catch (error) {
-      archive.abort()
+      teardownArchive(archive, output)
       if (!clientGone && !res.headersSent) res.status(503).type('text/plain').send('ZIP creation failed')
       return
     }
@@ -334,13 +346,30 @@ function abortDownload (archive: Archiver, res: Response, failure: Failure) {
     ? `HTTP ${failure.status}`
     : (failure.error instanceof Error ? failure.error.message : String(failure.error))
   log(`Aborting ZIP download: failed to fetch asset ${failure.asset.id} from ${urlPathForLog(failure.url)} (${detail})`)
-  archive.abort()
+  teardownArchive(archive)
   if (failure.error instanceof ZipSizeLimitError && !res.headersSent) {
     res.removeHeader('Content-Disposition')
     res.status(413).type('text/plain').send('ZIP exceeds configured size limit')
     return
   }
   res.destroy()
+}
+
+/**
+ * Tear down an aborted archive so it releases its resources. `abort()` alone
+ * kills the queue but leaves any in-flight entry paused, holding an open read
+ * fd on its staging tempfile forever; once the staging directory is removed
+ * that deleted-but-open file keeps pinning disk space on the VPS staging
+ * volume until the process exits. Draining the archiver readable lets the
+ * entry finish and close (ported from upstream #284).
+ */
+function teardownArchive (archive: Archiver, sink?: NodeJS.WritableStream & { destroy: (error?: Error) => void }) {
+  archive.abort()
+  if (sink) {
+    archive.unpipe(sink)
+    sink.destroy()
+  }
+  archive.resume()
 }
 
 function zipCachePath (share: SharedLink, assets: Asset[]): string {
@@ -404,7 +433,7 @@ async function serveZipFile (res: Response, path: string, filename: string, stat
 
   res.statusCode = partial ? 206 : 200
   res.setHeader('Content-Type', 'application/zip')
-  res.setHeader('Content-Disposition', `attachment; filename*=UTF-8''${filename}`)
+  res.setHeader('Content-Disposition', contentDisposition(filename))
   res.setHeader('Content-Length', String(end - start + 1))
   res.setHeader('Accept-Ranges', 'bytes')
   res.setHeader('Cache-Control', 'private, no-store')

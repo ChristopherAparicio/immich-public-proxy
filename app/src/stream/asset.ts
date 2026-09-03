@@ -9,6 +9,13 @@ import { Asset, ImageSize, IncomingShareRequest, SharedLink } from '../types'
 import { respondToInvalidRequest } from '../invalidRequestHandler'
 import { getFilename } from '../gallery/filename'
 import { isVideoAsset, resolveDownloadEndpoint, resolveImageEndpoint } from '../gallery/sizing'
+import { Readable } from 'stream'
+import { pipeline } from 'stream/promises'
+import { contentDisposition } from '../utils/sanitize'
+import { log } from '../utils/log'
+
+// Same header-receipt bound as the ZIP pipeline (see stream/download.ts).
+const UPSTREAM_HEADER_TIMEOUT_MS = 20_000
 
 /**
  * Stream an asset from Immich back to the client.
@@ -66,7 +73,26 @@ export async function assetBuffer (req: IncomingShareRequest, res: Response, ass
 
   const url = assetFetchUrl(asset, subpath, sizeQueryParam)
   const reqHeaders = await authHeadersForAsset(asset)
-  const data = await fetch(url, { headers: { ...fetchHeaders, ...reqHeaders } })
+
+  // Tie the upstream fetch to the client connection so a visitor that leaves
+  // (or never reads) cannot make Immich stream into memory nobody drains.
+  const upstream = new AbortController()
+  res.once('close', () => {
+    if (!res.writableFinished) upstream.abort(new Error('Client connection closed'))
+  })
+  const headerTimer = setTimeout(
+    () => upstream.abort(new Error(`No response headers within ${UPSTREAM_HEADER_TIMEOUT_MS}ms`)),
+    UPSTREAM_HEADER_TIMEOUT_MS
+  )
+  let data: globalThis.Response
+  try {
+    data = await fetch(url, { headers: { ...fetchHeaders, ...reqHeaders }, signal: upstream.signal })
+  } catch (error) {
+    if (res.destroyed || res.closed) return
+    throw error
+  } finally {
+    clearTimeout(headerTimer)
+  }
 
   if (data.status < 200 || data.status >= 300) {
     let immichMessage = ''
@@ -84,17 +110,27 @@ export async function assetBuffer (req: IncomingShareRequest, res: Response, ass
     const playbackMime = useVideoPlayback
       ? (data.headers.get('content-type') || '').split(';')[0].trim() || undefined
       : undefined
-    const filename = encodeURI(getFilename(asset, servedSize, playbackMime))
-    res.setHeader('Content-Disposition', `attachment; filename*=UTF-8''${filename}`)
+    res.setHeader('Content-Disposition', contentDisposition(getFilename(asset, servedSize, playbackMime)))
   }
   headerList.forEach(header => {
     const value = data.headers.get(header)
     if (value) res.setHeader(header, value)
   })
-  await data.body?.pipeTo(
-    new WritableStream({
-      write (chunk) { res.write(chunk) }
-    })
-  )
-  res.end()
+  if (req.req?.method === 'HEAD' || !data.body) {
+    await data.body?.cancel().catch(() => { /* best effort */ })
+    res.end()
+    return
+  }
+  try {
+    // Backpressure-aware: pipeline pauses the upstream body while the client
+    // is slow instead of buffering it, and ends `res` on completion.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await pipeline(Readable.fromWeb(data.body as any), res)
+  } catch (error) {
+    upstream.abort()
+    // pipeline destroys `res` with the upstream error; a plain client
+    // disconnect leaves `errored` unset and is not worth an error log.
+    if (res.errored) throw error
+    log('Asset stream cancelled by client')
+  }
 }

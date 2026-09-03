@@ -18,6 +18,31 @@ vi.mock('os', async importOriginal => {
   return { ...orig, tmpdir: () => TEST_TMP }
 })
 
+/*
+Switchable stand-in for the archive output file: when armed, the write stream
+accepts one chunk and then fails like a full staging volume (ENOSPC), which is
+the one fork path where archiver still has in-flight entries when it is
+aborted.
+*/
+const writeStreamHook = vi.hoisted(() => ({ failAfterFirstChunk: false }))
+vi.mock('fs', async importOriginal => {
+  const orig = await importOriginal<typeof import('fs')>()
+  const { Writable: WritableStream } = await import('stream')
+  return {
+    ...orig,
+    createWriteStream: (path: Parameters<typeof orig.createWriteStream>[0], opts?: Parameters<typeof orig.createWriteStream>[1]) => {
+      if (!writeStreamHook.failAfterFirstChunk) return orig.createWriteStream(path, opts)
+      let first = true
+      return new WritableStream({
+        write (_chunk, _enc, cb) {
+          if (first) { first = false; cb(); return }
+          cb(new Error('ENOSPC: no space left on device'))
+        }
+      })
+    }
+  }
+})
+
 beforeAll(async () => {
   await fs.mkdir(TEST_TMP, { recursive: true })
 })
@@ -31,6 +56,33 @@ afterEach(async () => {
   const entries = await fs.readdir(TEST_TMP).catch(() => [] as string[])
   await Promise.all(entries.map(name => fs.rm(`${TEST_TMP}/${name}`, { recursive: true, force: true })))
 })
+
+/**
+ * Open fds pointing at deleted staging tempfiles. An aborted archiver used to
+ * keep the in-flight entry's read stream open forever, pinning the deleted
+ * file's space on the staging volume (upstream #284). Linux-only
+ * introspection; returns [] elsewhere, making the assertions no-ops.
+ */
+async function deletedStagingFds (): Promise<string[]> {
+  const fds = await fs.readdir('/proc/self/fd').catch(() => [] as string[])
+  const leaked: string[] = []
+  for (const fd of fds) {
+    const target = await fs.readlink('/proc/self/fd/' + fd).catch(() => '')
+    if (target.includes('ipp-zip-') && target.includes('(deleted)')) leaked.push(target)
+  }
+  return leaked
+}
+
+/** Wait for archiver's post-abort drain to release fds, then return leftovers. */
+async function settledDeletedStagingFds (timeoutMs = 3000): Promise<string[]> {
+  const deadline = Date.now() + timeoutMs
+  let leaked = await deletedStagingFds()
+  while (leaked.length > 0 && Date.now() < deadline) {
+    await new Promise(resolve => setTimeout(resolve, 100))
+    leaked = await deletedStagingFds()
+  }
+  return leaked
+}
 
 async function stagingDirs (): Promise<string[]> {
   const entries = await fs.readdir(TEST_TMP).catch(() => [] as string[])
@@ -75,6 +127,10 @@ class FakeRes extends Writable {
   }
 
   setHeader (_name: string, _value: string) { return this }
+  removeHeader (_name: string) { return this }
+  status (code: number) { this.statusCode = code; return this }
+  type (_mime: string) { return this }
+  send (body?: string) { this.end(body); return this }
 
   _write (chunk: Buffer, _enc: string, cb: (error?: Error | null) => void) {
     this.received += chunk.length
@@ -134,6 +190,7 @@ describe('downloadAssets abort handling', () => {
     expect(signals.length).toBeGreaterThan(0)
     expect(signals.every(s => s.aborted)).toBe(true)
     expect(await stagingDirs()).toEqual([])
+    expect(await settledDeletedStagingFds()).toEqual([])
   }, 10_000)
 
   it('resolves and cleans up when the client aborts while the zip is streaming', async () => {
@@ -152,6 +209,23 @@ describe('downloadAssets abort handling', () => {
     }
     await downloadAssets(asResponse(res), share, [makeAsset('a1'), makeAsset('a2')])
     expect(await stagingDirs()).toEqual([])
+    expect(await settledDeletedStagingFds()).toEqual([])
+  }, 10_000)
+
+  it('releases staging fds when the archive file cannot be written (ENOSPC on the staging volume)', async () => {
+    vi.stubGlobal('fetch', instantFetch(2 * 1024 * 1024))
+    writeStreamHook.failAfterFirstChunk = true
+    try {
+      const res = new FakeRes()
+      await downloadAssets(asResponse(res), share, [makeAsset('a1'), makeAsset('a2')])
+      expect(res.statusCode).toBe(503)
+      expect(await stagingDirs()).toEqual([])
+      // Without teardownArchive the in-flight entry keeps a read fd on a
+      // tempfile that the staging cleanup has already deleted.
+      expect(await settledDeletedStagingFds()).toEqual([])
+    } finally {
+      writeStreamHook.failAfterFirstChunk = false
+    }
   }, 10_000)
 
   it('cleans up and destroys the response when an upstream fetch keeps failing', async () => {
@@ -160,5 +234,6 @@ describe('downloadAssets abort handling', () => {
     await downloadAssets(asResponse(res), share, [makeAsset('a1')])
     expect(res.destroyed).toBe(true)
     expect(await stagingDirs()).toEqual([])
+    expect(await settledDeletedStagingFds()).toEqual([])
   }, 10_000)
 })

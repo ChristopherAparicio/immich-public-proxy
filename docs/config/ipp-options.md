@@ -185,6 +185,28 @@ Requests beyond this bound receive HTTP 429.
 
 Maximum time a queued browser may stop polling before its job is discarded.
 
+### `downloadZipQueuedPollSeconds`
+
+**Type:** `int` · **Default:** `30`
+
+Maximum time a job that is still *queued* (not yet preparing) may go without a
+status poll before it is dropped as abandoned. The gallery polls every two
+seconds, so real visitors are unaffected; a client that creates jobs and never
+polls them cannot hold the queue slots for the full heartbeat window. Ready
+jobs keep the separate ready lease.
+
+### `downloadZipPlanMaxInFlight`
+
+**Type:** `int` · **Default:** `2`
+
+Process-wide cap on album plans being computed at the same time. Planning
+probes Immich once per asset, so this bounds the request amplification a
+public visitor can cause upstream regardless of how many sessions they open.
+Excess plan requests receive HTTP 429 with `Retry-After`. Identical plans for
+the same share are shared across visitors and concurrent misses coalesce.
+Environment override: `IPP_ZIP_PLAN_MAX_IN_FLIGHT` (takes precedence over
+`config.json`, as reported in the startup `ZIP limits:` log line).
+
 ### `downloadZipReadyLeaseSeconds`
 
 **Type:** `int` · **Default:** `120`

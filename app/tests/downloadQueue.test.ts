@@ -27,7 +27,7 @@ vi.mock('../src/config/access', () => ({
 }))
 vi.mock('../src/utils/log', () => ({ log: Object.assign(vi.fn(), { error: vi.fn() }) }))
 
-const { ZipDownloadQueue, ZipPlanUnavailableError, ZipVisitorBusyError } = await import('../src/downloadQueue')
+const { ZipDownloadQueue, ZipPlanBusyError, ZipPlanUnavailableError, ZipVisitorBusyError } = await import('../src/downloadQueue')
 
 function asset (id: string): Asset {
   return {
@@ -220,8 +220,14 @@ describe('ZipDownloadQueue', () => {
     const secondShare = share('second')
     const second = queue.enqueue('key:second', 'visitor-b', secondShare, secondShare.assets)
 
+    let previousSeconds = 0
     for (const seconds of [50, 100, 150, 200, 250, 299]) {
+      // A waiting browser polls every 2 s; one poll between probes is enough
+      // to stay inside the queued poll window.
+      now = 1_000_000 + Math.floor((previousSeconds + seconds) / 2) * 1000
+      queue.get('key:second', 'visitor-b', second.id)
       now = 1_000_000 + seconds * 1000
+      previousSeconds = seconds
       await queue.stream(
         'key:first',
         'visitor-a',
@@ -289,7 +295,7 @@ describe('ZipDownloadQueue', () => {
     expect(internal?.assetParts.map(part => part.map(item => item.asset.id))).toEqual([['a', 'b'], ['c']])
   })
 
-  it('binds an opaque plan and every part request to its visitor and share', async () => {
+  it('binds an opaque plan to its share while jobs stay bound to the requesting visitor', async () => {
     numericConfig.IPP_ZIP_SPLIT_THRESHOLD_BYTES = 1
     numericConfig.IPP_ZIP_PART_TARGET_BYTES = 8
     const album = share('bound')
@@ -301,9 +307,68 @@ describe('ZipDownloadQueue', () => {
 
     expect(plan.id).toMatch(/^[A-Za-z0-9_-]{24}$/)
     expect(queue.enqueuePart('key:other', 'visitor-a', plan.id, 1)).toBeUndefined()
-    expect(queue.enqueuePart('key:bound', 'visitor-b', plan.id, 1)).toBeUndefined()
     expect(queue.enqueuePart('key:bound', 'visitor-a', plan.id, 3)).toBeUndefined()
-    expect(queue.enqueuePart('key:bound', 'visitor-a', plan.id, 1)?.partIndex).toBe(1)
+    const job = queue.enqueuePart('key:bound', 'visitor-b', plan.id, 1)!
+    expect(job.partIndex).toBe(1)
+    expect(queue.get('key:bound', 'visitor-b', job.id)?.id).toBe(job.id)
+    expect(queue.get('key:bound', 'visitor-a', job.id)).toBeUndefined()
+  })
+
+  it('reuses a non-expired plan across visitors without repeating upstream size work', async () => {
+    const album = share('shared')
+    const estimate = vi.fn(estimator({ 'shared-1': 5, 'shared-2': 6 }))
+    const queue = new ZipDownloadQueue(downloadAssets, estimate)
+
+    const first = await queue.plan('key:shared', 'visitor-a', album, album.assets)
+    const second = await queue.plan('key:shared', 'visitor-b', album, [...album.assets].reverse())
+
+    expect(second).toEqual(first)
+    expect(estimate).toHaveBeenCalledTimes(1)
+  })
+
+  it('bounds in-flight planning process-wide and coalesces duplicate albums', async () => {
+    numericConfig.IPP_ZIP_PLAN_MAX_IN_FLIGHT = 1
+    let release!: () => void
+    const gate = new Promise<void>(resolve => { release = resolve })
+    const estimate = vi.fn(async (_share: SharedLink, assets: Asset[]) => {
+      await gate
+      return assets.map(asset => ({ asset, sizeBytes: 4 }))
+    })
+    const queue = new ZipDownloadQueue(downloadAssets, estimate)
+    const albumA = share('a')
+    const albumB = share('b')
+
+    const first = queue.plan('key:a', 'visitor-1', albumA, albumA.assets)
+    await expect(queue.plan('key:b', 'visitor-2', albumB, albumB.assets)).rejects.toBeInstanceOf(ZipPlanBusyError)
+    const coalesced = queue.plan('key:a', 'visitor-3', albumA, albumA.assets)
+    release()
+    const [planA, planC] = await Promise.all([first, coalesced])
+
+    expect(planC.id).toBe(planA.id)
+    expect(estimate).toHaveBeenCalledTimes(1)
+    await expect(queue.plan('key:b', 'visitor-2', albumB, albumB.assets)).resolves.toMatchObject({ totalBytes: 8 })
+  })
+
+  it('drops a queued job whose browser stops polling within the poll window', async () => {
+    let now = 1_000_000
+    vi.spyOn(Date, 'now').mockImplementation(() => now)
+    const queue = new ZipDownloadQueue(downloadAssets)
+    const activeShare = share('active')
+    const polledShare = share('polled')
+    const silentShare = share('silent')
+    const active = queue.enqueue('key:active', 'visitor-a', activeShare, activeShare.assets)
+    await settle()
+    const polled = queue.enqueue('key:polled', 'visitor-b', polledShare, polledShare.assets)
+    const silent = queue.enqueue('key:silent', 'visitor-c', silentShare, silentShare.assets)
+    expect(polled.state).toBe('queued')
+    expect(silent.state).toBe('queued')
+
+    now += 20_000
+    expect(queue.get('key:polled', 'visitor-b', polled.id)?.state).toBe('queued')
+    now += 20_000
+    expect(queue.get('key:active', 'visitor-a', active.id)?.state).toBe('ready')
+    expect(queue.get('key:silent', 'visitor-c', silent.id)?.state).toBe('cancelled')
+    expect(queue.get('key:polled', 'visitor-b', polled.id)?.state).toBe('queued')
   })
 
   it('rejects a plan when one asset exceeds the hard ZIP ceiling', async () => {

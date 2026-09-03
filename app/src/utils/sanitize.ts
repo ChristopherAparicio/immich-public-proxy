@@ -39,3 +39,24 @@ export function sanitize (input: string, replacement = ''): string {
     .replace(windowsTrailingRe, replacement)
     .slice(0, 254)
 }
+
+// RFC 5987 attr-char: the only bytes that may appear unescaped in filename*.
+const attrChar = /^[A-Za-z0-9!#$&+\-.^_`|~]$/
+
+/**
+ * Build a `Content-Disposition: attachment` header value. `filename*` is
+ * percent-encoded byte-wise so a name like `Trip; filename=evil.exe` cannot
+ * inject a second parameter; the plain `filename=` fallback is ASCII-only and
+ * quoted for clients that ignore RFC 5987.
+ */
+export function contentDisposition (filename: string): string {
+  const fallback = filename
+    .replace(/[^\x20-\x7e]/g, '_')
+    .replace(/["\\]/g, '_')
+  let encoded = ''
+  for (const byte of Buffer.from(filename, 'utf8')) {
+    const char = String.fromCharCode(byte)
+    encoded += attrChar.test(char) ? char : '%' + ('0' + byte.toString(16).toUpperCase()).slice(-2)
+  }
+  return `attachment; filename="${fallback}"; filename*=UTF-8''${encoded}`
+}

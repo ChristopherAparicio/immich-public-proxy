@@ -2,6 +2,7 @@ import { NextFunction, Request, Response } from 'express-serve-static-core'
 import { getConfigOption } from './config/access'
 import { respondToInvalidRequest } from './invalidRequestHandler'
 import { log } from './utils/log'
+import { describeError } from './utils/redact'
 
 /**
  * Apply the response headers configured under `ipp.responseHeaders` to the
@@ -30,11 +31,19 @@ export function asyncHandler (fn: (req: Request, res: Response, next: NextFuncti
  * same privacy policy as any other invalid request.
  */
 export function errorHandler (err: unknown, req: Request, res: Response, _next: NextFunction): void {
-  log.error('Error handling ' + req.method + ' ' + req.path + ' - ' +
-    (err instanceof Error ? (err.stack || err.message) : String(err)))
+  log.error('Error handling ' + req.method + ' ' + req.path + ' - ' + describeError(err))
   if (res.headersSent) {
     res.end()
     return
   }
   respondToInvalidRequest(res, 404, 'Unhandled error for ' + req.path)
+}
+
+/**
+ * Fallback for every unmatched route and method. Registered with `app.all` so
+ * a `PUT /x` gets the same policy response as `GET /x` instead of Express's
+ * default HTML "Cannot PUT" page.
+ */
+export function notFoundHandler (req: Request, res: Response): void {
+  respondToInvalidRequest(res, 404, 'Invalid route ' + req.method + ' ' + req.path)
 }
