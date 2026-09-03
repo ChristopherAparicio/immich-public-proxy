@@ -418,11 +418,17 @@ describe('ZipDownloadQueue', () => {
       const album = share(name)
       return queue.enqueue(`key:${name}`, `visitor-${index}`, album, album.assets)
     })
-    await new Promise(resolve => setTimeout(resolve, 40))
+    // Three sequential 5 ms preparations settle in ~15 ms on an idle machine;
+    // poll instead of sleeping a fixed budget so a loaded CI runner cannot
+    // observe the third job still preparing.
+    const readyStates = () => jobs.slice(0, 3).map((job, index) => queue.get(`key:${['one', 'two', 'three'][index]}`, `visitor-${index}`, job.id)?.state)
+    const deadline = Date.now() + 2000
+    while (readyStates().some(state => state !== 'ready') && Date.now() < deadline) {
+      await new Promise(resolve => setTimeout(resolve, 5))
+    }
 
     expect(maxConcurrentPreparations).toBe(1)
-    expect(jobs.slice(0, 3).map((job, index) => queue.get(`key:${['one', 'two', 'three'][index]}`, `visitor-${index}`, job.id)?.state))
-      .toEqual(['ready', 'ready', 'ready'])
+    expect(readyStates()).toEqual(['ready', 'ready', 'ready'])
     expect(queue.get('key:four', 'visitor-3', jobs[3].id)?.state).toBe('queued')
   })
 
