@@ -17,9 +17,10 @@ release notes remain available in the upstream repository.
   `proxy-addr` 2.0.8 (IPv4-mapped IPv6 trust subnet spoofing; IPP trusts
   one hop count, not a subnet), and raise the `qs` override to 6.16.2. Development
   dependencies (`vite`, `vitest`, `concurrently`) are refreshed likewise.
-- Known remaining moderate advisories: `archiver` 7 via `glob`/`minimatch`
-  (IPP only calls `archive.file`, never glob or directory expansion) and the
-  development-only `@typescript-eslint` chain; both need a major upgrade.
+- Override the patched `glob` 14.0.4 under `archiver-utils` and `minimatch`
+  11.0.5 under `@typescript-eslint/typescript-estree`, whose latest releases
+  still depend on vulnerable ranges (GHSA-3g3m-2fjr-6pw4, GHSA-g3hv-75wg-m249).
+  `npm audit` now reports no advisory.
 
 ## 3.2.1-immich-share.7 — 2026-09-03
 
