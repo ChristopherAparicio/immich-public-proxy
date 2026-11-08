@@ -21,6 +21,8 @@ release notes remain available in the upstream repository.
   11.0.5 under `@typescript-eslint/typescript-estree`, whose latest releases
   still depend on vulnerable ranges (GHSA-3g3m-2fjr-6pw4, GHSA-g3hv-75wg-m249).
   `npm audit` now reports no advisory.
+- Refresh the documentation site's `vite` (8.3.6) and `source-map-js` (1.2.2)
+  within their semver ranges for the development-server advisories.
 
 ## 3.2.1-immich-share.7 — 2026-09-03
 
