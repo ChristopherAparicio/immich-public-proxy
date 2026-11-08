@@ -3,6 +3,24 @@
 All notable fork-specific changes are documented here. Upstream history and
 release notes remain available in the upstream repository.
 
+## 3.2.1-immich-share.8 — 2026-11-08
+
+### Security
+
+- Rebuild on Node.js 24.22.2 (`node:24.22.2-alpine3.24`, pinned by digest),
+  which includes the 24.22.1 security release for the "node2shell" brotli
+  decompression remote code execution (fixed upstream in IPP 4.1.2,
+  alangrainger/immich-public-proxy#311). The
+  previous image ran Node.js 24.19.0. No application code changes.
+- Refresh runtime dependencies within their semver ranges: `body-parser`
+  1.20.9 (denial of service via trailing bytes after a compressed body),
+  `proxy-addr` 2.0.8 (IPv4-mapped IPv6 trust subnet spoofing; IPP trusts
+  one hop count, not a subnet), and raise the `qs` override to 6.16.2. Development
+  dependencies (`vite`, `vitest`, `concurrently`) are refreshed likewise.
+- Known remaining moderate advisories: `archiver` 7 via `glob`/`minimatch`
+  (IPP only calls `archive.file`, never glob or directory expansion) and the
+  development-only `@typescript-eslint` chain; both need a major upgrade.
+
 ## 3.2.1-immich-share.7 — 2026-09-03
 
 ### Security
