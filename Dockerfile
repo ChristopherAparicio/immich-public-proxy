@@ -2,7 +2,7 @@
 
 # Node 24 LTS / Alpine 3.24, pinned to a multi-architecture manifest digest.
 # Renovation is explicit and must pass the complete CI and ZIP regression suite.
-ARG NODE_IMAGE=node:24.19.0-alpine3.24@sha256:d32cdf619f63fe0471182d08996dd516c6275bb5fd31ae06e55a570bd9e1ad43
+ARG NODE_IMAGE=node:24.22.2-alpine3.24@sha256:a34ab6d7f6f4813f4d0c5469d74685604b962fbdbf5793a7bc7b4998ecb867c8
 
 FROM ${NODE_IMAGE} AS build
 USER node

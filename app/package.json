@@ -1,6 +1,6 @@
 {
   "name": "immich-public-proxy",
-  "version": "3.2.1-immich-share.7",
+  "version": "3.2.1-immich-share.8",
   "scripts": {
     "dev": "concurrently -n server,client -c blue,green \"tsx watch src/index.ts\" \"tsc -w -p tsconfig.client.json\"",
     "build": "tsc && tsc -p tsconfig.client.json",
@@ -46,6 +46,12 @@
     "vitest": "^4"
   },
   "overrides": {
-    "qs": "6.16.0"
+    "qs": "6.16.2",
+    "archiver-utils": {
+      "glob": "14.0.4"
+    },
+    "@typescript-eslint/typescript-estree": {
+      "minimatch": "11.0.5"
+    }
   }
 }
