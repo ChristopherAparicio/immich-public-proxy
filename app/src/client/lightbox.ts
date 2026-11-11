@@ -7,13 +7,14 @@
 import PhotoSwipeLightbox from '/share/static/photoswipe/photoswipe-lightbox.esm.js' // eslint-disable-line import/no-absolute-path
 
 import type { PhotoSwipeOptions } from 'photoswipe'
-import { state, SIDEBAR_WIDTH, MOBILE_BREAKPOINT } from './state.js'
+import { state, SIDEBAR_WIDTH, MOBILE_BREAKPOINT, itemForSlide, itemIndexForSlide, selectedItemIndices } from './state.js'
 import type { GalleryItem } from '../shared/types.js'
 import {
   registerBackButton,
   registerCaption,
   registerDownloadButton,
-  registerFullscreenButton
+  registerFullscreenButton,
+  registerSelectButton
 } from './lightbox-ui.js'
 import { registerSidebar } from './sidebar.js'
 import { registerLazyDetail } from './metadata.js'
@@ -54,12 +55,15 @@ const loadedBitmapWidth = new Map<number, number>() // index -> naturalWidth of 
 const upgradedSlides = new Set<number>() // indices already swapped to fullUrl
 
 /**
- * Translate `state.items` into PhotoSwipe's dataSource array. Images use
- * `src`/`width`/`height`; videos use the `html` slide with a `<video>`
+ * Translate gallery items into PhotoSwipe's dataSource array: the whole album
+ * by default, or the given gallery indices (the selection carousel). Images
+ * use `src`/`width`/`height`; videos use the `html` slide with a `<video>`
  * element so PhotoSwipe streams from the server's `/share/video/...` URL.
  */
-function buildDataSource () {
-  return state.items.map((item, idx) => {
+function buildDataSource (indices?: number[]) {
+  const order = indices ?? state.items.map((_, idx) => idx)
+  return order.map(idx => {
+    const item = state.items[idx]
     if (item.type === 'VIDEO') {
       const v = parseVideoData(item)
       const typeAttr = v.type ? ' type="' + escapeAttr(v.type) + '"' : ''
@@ -151,8 +155,9 @@ function registerZoomUpgrade (lightbox: { on: (ev: string, cb: (e: any) => void)
  */
 function recordAndRefresh (content: any) { // eslint-disable-line @typescript-eslint/no-explicit-any
   const img = content?.element
-  if (img instanceof HTMLImageElement && img.naturalWidth > 0 && typeof content.index === 'number') {
-    loadedBitmapWidth.set(content.index, img.naturalWidth)
+  const idx = content?.data?._ippIndex
+  if (img instanceof HTMLImageElement && img.naturalWidth > 0 && typeof idx === 'number') {
+    loadedBitmapWidth.set(idx, img.naturalWidth)
   }
   const slide = content?.slide
   if (slide && typeof slide.calculateSize === 'function') {
@@ -218,7 +223,7 @@ export function initLightbox () {
         ? SIDEBAR_WIDTH + basePadding.right
         : basePadding.right
     }),
-    dataSource: buildDataSource(),
+    dataSource: allSlides(),
     // @ts-expect-error - runtime URL resolved by Express static
     pswpModule: () => import('/share/static/photoswipe/photoswipe.esm.js') // eslint-disable-line import/no-absolute-path
   }
@@ -240,6 +245,12 @@ export function initLightbox () {
   registerFullscreenButton(state.lightbox)
   if (state.metadataConfig.descriptionInCaption) registerCaption(state.lightbox)
   if (state.metadataConfig.sidebarHasContent) registerSidebar(state.lightbox)
+  // Selection toggle (button + Space) only when the share allows downloads,
+  // i.e. when the selection toolbar is on the page.
+  if (state.toolbarEl) {
+    registerSelectButton(state.lightbox)
+    state.openSelectionLightbox = openSelectionLightbox
+  }
   // Lazy album items load their exif / description / filename on open; this
   // refreshes the UI elements above once detail arrives.
   registerLazyDetail(state.lightbox)
@@ -249,17 +260,17 @@ export function initLightbox () {
   // current slide as the user pages through.
   state.lightbox.on('uiRegister', () => {
     const pswp = state.lightbox.pswp
-    const item = state.items[pswp.currIndex]
+    const item = itemForSlide(pswp.currIndex)
     if (item) {
       history.pushState({ pswp: true }, '', '#' + item.id)
       state.lightboxPushedHistory = true
     }
     pswp.on('change', () => {
-      const it = state.items[pswp.currIndex]
+      const it = itemForSlide(pswp.currIndex)
       if (it) history.replaceState({ pswp: state.lightboxPushedHistory }, '', '#' + it.id)
     })
     pswp.on('close', () => {
-      scrollToCurrentSlide(pswp.currIndex)
+      scrollToCurrentSlide(itemIndexForSlide(pswp.currIndex))
       const wasFromHistory = state.closingFromHistory
       state.closingFromHistory = false
       if (wasFromHistory) {
@@ -279,6 +290,7 @@ export function initLightbox () {
         history.replaceState(null, '', window.location.pathname + window.location.search)
       }
     })
+    pswp.on('destroy', () => { state.slideIndices = null })
   })
 
   window.addEventListener('popstate', () => {
@@ -351,7 +363,30 @@ export function initLightbox () {
  * No-op if the lightbox hasn't been initialised yet.
  */
 export function openLightbox (index: number) {
-  if (state.lightbox) state.lightbox.loadAndOpen(index)
+  if (!state.lightbox) return
+  // loadAndOpen keeps the dataSource it is given, so always pass the whole
+  // album here in case the selection carousel replaced it.
+  state.slideIndices = null
+  state.lightbox.loadAndOpen(index, allSlides())
+}
+
+let allSlidesCache: ReturnType<typeof buildDataSource> | null = null
+function allSlides () {
+  if (!allSlidesCache) allSlidesCache = buildDataSource()
+  return allSlidesCache
+}
+
+/**
+ * Open the lightbox over the selected items only (gallery order), starting at
+ * `id`. Used by the selection panel thumbnails.
+ */
+function openSelectionLightbox (id: string) {
+  if (!state.lightbox) return
+  const indices = selectedItemIndices()
+  const start = indices.findIndex(idx => state.items[idx].id === id)
+  if (start < 0) return
+  state.slideIndices = indices
+  state.lightbox.loadAndOpen(start, buildDataSource(indices))
 }
 
 /**

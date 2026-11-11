@@ -4,7 +4,7 @@
 // button top-left, sections only render when their data is present. Toggled
 // by the toolbar info button or the `i` key, persisted via localStorage.
 
-import { state, SIDEBAR_STORAGE_KEY } from './state.js'
+import { state, SIDEBAR_STORAGE_KEY, itemForSlide } from './state.js'
 import { ICON_INFO, ICON_CLOSE, ICON_IMAGE, ICON_CALENDAR, ICON_CAMERA, ICON_IRIS, ICON_MAP } from './icons.js'
 import type { GalleryItem, GalleryExif } from '../shared/types.js'
 
@@ -38,7 +38,7 @@ export function registerSidebar (lightbox: LightboxInstance) {
       onInit: (el: HTMLElement, pswp: PswpInstance) => {
         el.classList.add('ipp-sidebar')
         el.setAttribute('aria-label', 'Photo information')
-        const renderSidebar = () => renderContents(el, state.items[pswp.currIndex])
+        const renderSidebar = () => renderContents(el, itemForSlide(pswp.currIndex))
         renderSidebar()
         pswp.on('change', renderSidebar)
         // Re-render when a lazy album item's detail arrives after open.

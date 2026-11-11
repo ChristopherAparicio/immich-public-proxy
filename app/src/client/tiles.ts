@@ -43,8 +43,8 @@ function decodeThumbhash (base64: string): string | null {
  * `loadVisibleTiles`), a play overlay for videos, and a selection
  * checkmark + long-press handler if the share allows downloads.
  *
- * Click opens the lightbox unless selection mode is active, in which case
- * it toggles the item's selection.
+ * Click opens the lightbox. In selection mode a touch tap toggles the item
+ * instead; with a mouse the checkmark toggles and the photo still opens.
  */
 export function createTile (index: number): HTMLAnchorElement {
   const item = state.items[index]
@@ -101,7 +101,9 @@ export function createTile (index: number): HTMLAnchorElement {
 
   a.addEventListener('click', (e) => {
     e.preventDefault()
-    if (state.selectMode) {
+    // In selection mode a touch tap toggles (the check is too small for a
+    // finger); a mouse click still opens the photo, the check toggles it.
+    if (state.selectMode && window.matchMedia('(pointer: coarse)').matches) {
       toggleSelection(item.id)
     } else {
       openLightbox(index)

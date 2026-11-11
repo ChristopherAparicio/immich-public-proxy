@@ -27,3 +27,7 @@ export const ICON_MAP = '<svg viewBox="0 0 24 24" aria-hidden="true"><path fill=
 
 // Check glyph shown inside selected tiles' checkmark circle
 export const CHECK_SVG = '<svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M21,7L9,19L3.5,13.5L4.91,12.09L9,16.17L19.59,5.59L21,7Z"/></svg>'
+
+// Selection toggle for the lightbox toolbar: an empty circle, or a filled
+// circle with a check when the slide is selected (CSS swaps the two paths).
+export const ICON_SELECT = '<svg class="pswp__icn" viewBox="0 0 24 24" aria-hidden="true"><path class="ipp-select-off" fill="currentColor" d="M12,20A8,8 0 0,1 4,12A8,8 0 0,1 12,4A8,8 0 0,1 20,12A8,8 0 0,1 12,20M12,2A10,10 0 0,0 2,12A10,10 0 0,0 12,22A10,10 0 0,0 22,12A10,10 0 0,0 12,2Z"/><path class="ipp-select-on" fill="currentColor" d="M12,2A10,10 0 0,1 22,12A10,10 0 0,1 12,22A10,10 0 0,1 2,12A10,10 0 0,1 12,2M11,16.5L18,9.5L16.59,8.09L11,13.67L7.91,10.59L6.5,12L11,16.5Z"/></svg>'
