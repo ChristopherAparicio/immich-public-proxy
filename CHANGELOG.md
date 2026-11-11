@@ -3,6 +3,24 @@
 All notable fork-specific changes are documented here. Upstream history and
 release notes remain available in the upstream repository.
 
+## 3.2.1-immich-share.9 — 2026-11-11
+
+### Fixed
+
+- The ZIP disk preflight no longer assumes every request reaches
+  `maxDownloadZipBytes`. It derives the staging limit from the free-space
+  budget (capped by the ceiling) and enforces it while staging, so a small
+  selection is no longer refused with 507 on a VPS that cannot hold two archives
+  at the ceiling. Sources that outgrow the disk-derived limit still stop with
+  507 before any ZIP byte is sent; the reserve, budget and 413 ceiling are
+  unchanged.
+
+### Changed
+
+- A prepared ZIP is deleted `downloadZipCompletedRetentionSeconds` (default
+  300) after a complete `GET`, instead of living the full
+  `downloadZipCacheTtlSeconds`. `HEAD` and `Range` requests keep the TTL.
+
 ## 3.2.1-immich-share.8 — 2026-11-08
 
 ### Security

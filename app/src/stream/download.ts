@@ -214,14 +214,20 @@ export async function downloadAssets (
   const usableAfterReserve = Math.max(0, availableBytes - minFreeBytes)
   const zipBudgetBytes = Math.floor(usableAfterReserve * budgetPercent / 100)
   const archiveOverheadBytes = 1024 * 1024 + assets.length * 4096
-  // Worst case while building: staged originals + final STORE archive. The
-  // fixed/per-entry allowance also covers ZIP metadata and filename overhead.
-  // The operator-controlled percentage prevents ZIP work from consuming the
-  // rest of a small VPS even when the filesystem itself reports free space.
-  if (zipBudgetBytes < 2 * maxBytes + archiveOverheadBytes) {
+  // Worst case while building: staged originals + final STORE archive, both
+  // bounded by the staging byte limit. The fixed/per-entry allowance also
+  // covers ZIP metadata and filename overhead. The operator-controlled
+  // percentage prevents ZIP work from consuming the rest of a small VPS even
+  // when the filesystem itself reports free space. The limit comes from the
+  // budget rather than assuming every request reaches the configured ceiling,
+  // so a small selection is not refused; if the real sources outgrow it,
+  // staging stops with 507 before any byte reaches the client.
+  const diskLimitBytes = Math.floor((zipBudgetBytes - archiveOverheadBytes) / 2)
+  if (diskLimitBytes <= 0) {
     res.status(507).type('text/plain').send('Insufficient staging space for ZIP download')
     return
   }
+  const stagingLimitBytes = Math.min(maxBytes, diskLimitBytes)
 
   const archive = archiver('zip', { store: true })
   // Without a listener, an archiver 'error' emission would crash the process.
@@ -230,7 +236,7 @@ export async function downloadAssets (
   const options: StagingOptions = {
     stagingDir: await fs.mkdtemp(join(tmpdir(), STAGING_DIR_PREFIX)),
     concurrency: Math.max(1, getNumericConfigOption('ipp.downloadFromImmichConcurrencyLimit', 20)),
-    maxBytes,
+    maxBytes: stagingLimitBytes,
     byteCounter: { value: 0 },
     cachePath,
     partialPath: cachePath + '.part-' + process.pid + '-' + crypto.randomUUID(),
@@ -257,7 +263,7 @@ export async function downloadAssets (
       return
     }
     if (failure) {
-      abortDownload(archive, res, failure)
+      abortDownload(archive, res, failure, stagingLimitBytes < maxBytes)
       return
     }
 
@@ -341,7 +347,7 @@ async function archiveStaged (
   return failure
 }
 
-function abortDownload (archive: Archiver, res: Response, failure: Failure) {
+function abortDownload (archive: Archiver, res: Response, failure: Failure, diskLimited: boolean) {
   const detail = failure.status !== undefined
     ? `HTTP ${failure.status}`
     : (failure.error instanceof Error ? failure.error.message : String(failure.error))
@@ -349,7 +355,13 @@ function abortDownload (archive: Archiver, res: Response, failure: Failure) {
   teardownArchive(archive)
   if (failure.error instanceof ZipSizeLimitError && !res.headersSent) {
     res.removeHeader('Content-Disposition')
-    res.status(413).type('text/plain').send('ZIP exceeds configured size limit')
+    // A disk-derived limit is a temporary storage condition, not proof that
+    // the request exceeds the configured ceiling.
+    if (diskLimited) {
+      res.status(507).type('text/plain').send('Insufficient staging space for ZIP download')
+    } else {
+      res.status(413).type('text/plain').send('ZIP exceeds configured size limit')
+    }
     return
   }
   res.destroy()
@@ -387,6 +399,14 @@ async function validCachedZip (path: string, maxAgeMs: number): Promise<Stats | 
   const stat = await fs.stat(path).catch(() => null)
   if (!stat || !stat.isFile() || stat.size <= 0 || stat.mtimeMs + maxAgeMs <= Date.now()) return null
   return stat
+}
+
+/**
+ * How long a fully sent archive stays for a resume. The existing cache-TTL
+ * timer still fires, so this only ever shortens the archive's lifetime.
+ */
+function completedZipRetentionMs (): number {
+  return Math.max(60, getNumericConfigOption('ipp.downloadZipCompletedRetentionSeconds', 300)) * 1000
 }
 
 function scheduleZipCacheDeletion (path: string, delayMs: number) {
@@ -446,6 +466,12 @@ async function serveZipFile (res: Response, path: string, filename: string, stat
 
   try {
     await pipeline(createReadStream(path, { start, end }), res)
+    // A full GET was handed to the socket: keep the archive only briefly for
+    // a resume, instead of the whole cache TTL. Range retries, HEAD probes and
+    // the queue's internal preparation response (no method) keep the TTL.
+    if (!partial && res.req?.method === 'GET') {
+      scheduleZipCacheDeletion(path, completedZipRetentionMs())
+    }
     return true
   } catch (error) {
     if (res.destroyed || res.closed) return false

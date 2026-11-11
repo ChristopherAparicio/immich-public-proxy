@@ -143,4 +143,55 @@ describe('resumable ZIP cache', () => {
     expect(fetchMock).not.toHaveBeenCalled()
     expect(await fs.readdir(TEST_TMP)).toEqual([])
   })
+
+  // Free space that cannot hold 2 x the configured ceiling, but easily holds
+  // the real sources: before the fix every such ZIP was refused with 507.
+  function smallBudget () {
+    config['ipp.maxDownloadZipBytes'] = 8 * 1024 * 1024
+    config['ipp.minDownloadZipFreeBytes'] = 0
+    config.IPP_ZIP_DISK_BUDGET_PERCENT = 50
+    // budget 2 MiB; minus ~1 MiB overhead, halved => ~0.5 MiB staging limit
+    vi.spyOn(fs, 'statfs').mockResolvedValue({ bavail: 4 * 1024 * 1024, bsize: 1 } as never)
+  }
+
+  it('sizes the disk preflight to the real sources, not the configured ceiling', async () => {
+    smallBudget()
+    vi.stubGlobal('fetch', vi.fn(async () => new globalThis.Response(Buffer.alloc(1024, 0x61), { status: 200 })))
+    const assets = [asset('small-1'), asset('small-2')]
+    const result = new FakeResponse()
+
+    await downloadAssets(response(result), share(assets), assets)
+
+    expect(result.statusCode).toBe(200)
+    expect(result.body().subarray(0, 2).toString()).toBe('PK')
+  })
+
+  it('returns 507, not 413, when real sources outgrow the disk-derived limit', async () => {
+    smallBudget()
+    vi.stubGlobal('fetch', vi.fn(async () => new globalThis.Response(Buffer.alloc(400 * 1024, 0x61), { status: 200 })))
+    const assets = [asset('big-1'), asset('big-2')]
+    const result = new FakeResponse()
+
+    await downloadAssets(response(result), share(assets), assets)
+
+    expect(result.statusCode).toBe(507)
+    expect(result.body().toString()).toContain('Insufficient staging space')
+    expect(await fs.readdir(TEST_TMP)).toEqual([])
+  })
+
+  it('shortens retention only after a full GET of the archive', async () => {
+    config['ipp.maxDownloadZipBytes'] = 1024 * 1024
+    config['ipp.minDownloadZipFreeBytes'] = 0
+    vi.stubGlobal('fetch', vi.fn(async () => new globalThis.Response(Buffer.alloc(1024, 0x61), { status: 200 })))
+    const timers = vi.spyOn(globalThis, 'setTimeout')
+    const retentionCalls = () => timers.mock.calls.filter(call => call[1] === 300_000).length
+    const assets = [asset('r1'), asset('r2')]
+
+    await downloadAssets(response(new FakeResponse({}, 'HEAD')), share(assets), assets)
+    await downloadAssets(response(new FakeResponse({ range: 'bytes=0-9' })), share(assets), assets)
+    expect(retentionCalls()).toBe(0)
+
+    await downloadAssets(response(new FakeResponse()), share(assets), assets)
+    expect(retentionCalls()).toBe(1)
+  })
 })

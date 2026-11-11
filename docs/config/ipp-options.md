@@ -103,7 +103,8 @@ that crosses the ceiling fails with HTTP 413 before any ZIP bytes are sent.
 **Type:** `int` · **Default:** `5368709120` (5 GiB)
 
 Free-space reserve that must remain available on the filesystem backing
-`TMPDIR`. Insufficient capacity returns HTTP 507.
+`TMPDIR`. Insufficient capacity returns HTTP 507, either before staging or as
+soon as the real sources outgrow the disk-derived staging limit.
 
 ### `downloadZipDiskBudgetPercent`
 
@@ -112,6 +113,9 @@ Free-space reserve that must remain available on the filesystem backing
 Percentage of free space remaining after `minDownloadZipFreeBytes` that one
 preparation may use. The preflight accounts for both staged source files and
 the final STORE archive, including a conservative per-entry metadata allowance.
+The resulting staging limit (half the budget, minus that allowance) is capped by
+`maxDownloadZipBytes` and enforced while sources are staged, so the check
+follows the real request size rather than assuming the ceiling.
 Values are clamped to 10–90.
 
 ### `downloadZipSplitThresholdBytes`
@@ -171,6 +175,15 @@ reverse proxy should enforce the same or a stricter connection limit.
 
 Lifetime of a prepared private ZIP. Cache files are mode `0600`, are removed on
 expiry, and are swept after an unclean restart.
+
+### `downloadZipCompletedRetentionSeconds`
+
+**Type:** `int` · **Default:** `300` (minimum `60`)
+
+How long a prepared ZIP stays after a complete `GET` was sent, so an
+interrupted download can still resume with a `Range` request. It only shortens
+the lifetime: the `downloadZipCacheTtlSeconds` expiry still applies. `HEAD`
+probes and `Range` retries do not trigger it.
 
 ### `downloadZipQueueMaxWaiting`
 
