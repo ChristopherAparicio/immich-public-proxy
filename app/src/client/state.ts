@@ -93,5 +93,29 @@ export const state = {
   // Re-render callbacks registered by lightbox UI elements (sidebar, caption,
   // download button). Each re-renders for the current slide. Invoked after a
   // lazy item's detail arrives so the just-opened slide reflects it.
-  slideRefreshers: [] as Array<() => void>
+  slideRefreshers: [] as Array<() => void>,
+  // Gallery item indices shown by the lightbox when it runs over a subset (the
+  // selection carousel); null when it shows the whole album in order.
+  slideIndices: null as number[] | null,
+  // Set by lightbox.ts so the selection panel can open its carousel without
+  // importing the PhotoSwipe module (keeps selection.ts importable in tests).
+  openSelectionLightbox: null as ((id: string) => void) | null
+}
+
+/** Gallery item index behind a lightbox slide index (-1 when out of range). */
+export function itemIndexForSlide (slide: number): number {
+  if (!state.slideIndices) return slide
+  return state.slideIndices[slide] ?? -1
+}
+
+/** Gallery item behind a lightbox slide index. */
+export function itemForSlide (slide: number): GalleryItem | undefined {
+  return state.items[itemIndexForSlide(slide)]
+}
+
+/** Gallery indices of the selected items, in gallery order. */
+export function selectedItemIndices (): number[] {
+  const indices: number[] = []
+  state.items.forEach((item, index) => { if (state.selected.has(item.id)) indices.push(index) })
+  return indices
 }

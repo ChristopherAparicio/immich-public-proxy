@@ -7,7 +7,7 @@ shared-album detail on demand. Individual shares bake everything in and
 never reach this module (no `metaBase`).
 */
 
-import { state } from './state.js'
+import { state, itemForSlide } from './state.js'
 import type { GalleryItem, AssetMetadata } from '../shared/types.js'
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -65,14 +65,14 @@ function prefetch (item: GalleryItem | undefined): void {
 
 function loadCurrent (pswp: PswpInstance): void {
   const index = pswp.currIndex
-  ensureDetail(state.items[index]).then(applied => {
+  ensureDetail(itemForSlide(index)).then(applied => {
     // Only refresh if the user is still on the slide we loaded for.
     if (applied && pswp.currIndex === index) {
       state.slideRefreshers.forEach(fn => fn())
     }
   })
-  prefetch(state.items[index + 1])
-  prefetch(state.items[index - 1])
+  prefetch(itemForSlide(index + 1))
+  prefetch(itemForSlide(index - 1))
 }
 
 /**

@@ -2,8 +2,9 @@
 // download button, fullscreen toggle. Each is gated by config or feature
 // detection. The info sidebar lives in `sidebar.ts`.
 
-import { state } from './state.js'
-import { ICON_BACK, ICON_DOWNLOAD, ICON_FULLSCREEN, ICON_FULLSCREEN_EXIT } from './icons.js'
+import { state, itemForSlide } from './state.js'
+import { ICON_BACK, ICON_DOWNLOAD, ICON_FULLSCREEN, ICON_FULLSCREEN_EXIT, ICON_SELECT } from './icons.js'
+import { enterSelectMode, toggleSelection } from './selection.js'
 
 // PhotoSwipe types are not bundled with the project. These two interfaces
 // describe just enough of the surface we touch to keep the rest of the file
@@ -26,7 +27,8 @@ interface PswpInstance {
   ui: {
     registerElement: (config: PswpUiElementConfig) => void
   }
-  on: (event: string, cb: () => void) => void
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  on: (event: string, cb: (e: any) => void) => void
   close: () => void
 }
 
@@ -73,7 +75,7 @@ export function registerCaption (lightbox: LightboxInstance) {
       onInit: (el: HTMLElement, pswp: PswpInstance) => {
         el.classList.add('pswp__caption')
         const render = () => {
-          const item = state.items[pswp.currIndex]
+          const item = itemForSlide(pswp.currIndex)
           const text = (item && item.description) || ''
           el.textContent = text
           el.hidden = !text
@@ -105,7 +107,7 @@ export function registerDownloadButton (lightbox: LightboxInstance) {
         link.setAttribute('target', '_blank')
         link.setAttribute('rel', 'noopener')
         const update = () => {
-          const item = state.items[pswp.currIndex]
+          const item = itemForSlide(pswp.currIndex)
           if (item && item.downloadUrl) {
             link.href = item.downloadUrl
             link.setAttribute('download', item.downloadFilename || '')
@@ -157,6 +159,58 @@ export function registerFullscreenButton (lightbox: LightboxInstance) {
             document.exitFullscreen().catch(() => {})
           }
         })
+      }
+    })
+  })
+}
+
+/**
+ * Register the selection toggle: a toolbar button and the Space key add or
+ * remove the current slide from the selection (and so from the selection
+ * panel) without leaving the lightbox. In the selection carousel a removed
+ * slide stays visible but dimmed, so a second Space puts it back.
+ *
+ * Space is left alone while a <video> has focus (play/pause) and while this
+ * button has focus (the native button activation already toggles). Any other
+ * focused button is blurred first so Space does not also activate it.
+ */
+export function registerSelectButton (lightbox: LightboxInstance) {
+  lightbox.on('uiRegister', () => {
+    lightbox.pswp.ui.registerElement({
+      name: 'select-button',
+      order: 6,
+      isButton: true,
+      ariaLabel: 'Select photo',
+      html: ICON_SELECT,
+      onInit: (el: HTMLElement, pswp: PswpInstance) => {
+        const render = () => {
+          const item = itemForSlide(pswp.currIndex)
+          const selected = !!item && state.selected.has(item.id)
+          el.classList.toggle('ipp-selected', selected)
+          el.setAttribute('aria-pressed', String(selected))
+          el.title = selected ? 'Deselect (Space)' : 'Select (Space)'
+          pswp.element.classList.toggle('ipp-slide-unselected', !!state.slideIndices && !selected)
+        }
+        const toggle = () => {
+          const item = itemForSlide(pswp.currIndex)
+          if (!item) return
+          if (!state.selectMode) enterSelectMode()
+          toggleSelection(item.id)
+          render()
+        }
+        el.addEventListener('click', toggle)
+        pswp.on('change', render)
+        pswp.on('keydown', (e: { originalEvent: KeyboardEvent, preventDefault: () => void }) => {
+          const ev = e.originalEvent
+          if (ev.code !== 'Space' && ev.key !== ' ') return
+          const active = document.activeElement
+          if (active instanceof HTMLVideoElement || active === el) return
+          if (active instanceof HTMLElement && active.closest('button, a')) active.blur()
+          e.preventDefault()
+          ev.preventDefault()
+          if (!ev.repeat) toggle()
+        })
+        render()
       }
     })
   })

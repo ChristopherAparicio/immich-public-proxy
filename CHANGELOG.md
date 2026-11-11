@@ -3,6 +3,25 @@
 All notable fork-specific changes are documented here. Upstream history and
 release notes remain available in the upstream repository.
 
+## 3.2.1-immich-share.11 — 2026-11-11
+
+### Added
+
+- Select from the lightbox: a toolbar toggle and the Space key add or remove
+  the current photo from the selection (and the selection panel) without
+  leaving the viewer. Space is left to a focused video (play/pause).
+- Selection carousel: clicking a thumbnail in the selection panel opens the
+  lightbox over the selected photos only. A photo removed there stays visible,
+  dimmed, so a second Space restores it.
+
+### Changed
+
+- In selection mode a mouse click on a photo opens it in the lightbox (the
+  checkmark still toggles); a touch tap keeps toggling.
+- Lightbox UI elements (caption, download, info sidebar, lazy detail, URL
+  hash) resolve the current photo through the slide-to-item mapping, so they
+  stay correct in the selection carousel.
+
 ## 3.2.1-immich-share.10 — 2026-11-11
 
 ### Added

@@ -201,18 +201,24 @@ function panelEntry (item: GalleryItem): HTMLLIElement {
   const existing = panelEntries.get(item.id)
   if (existing) return existing
   const li = document.createElement('li')
+  const open = document.createElement('button')
+  open.type = 'button'
+  open.className = 'select-panel-open'
+  open.setAttribute('aria-label', 'View selected photos')
+  open.addEventListener('click', () => { if (state.openSelectionLightbox) state.openSelectionLightbox(item.id) })
   const img = document.createElement('img')
   img.src = item.thumbnailUrl
   img.alt = ''
   img.loading = 'lazy'
   img.decoding = 'async'
+  open.append(img)
   const remove = document.createElement('button')
   remove.type = 'button'
   remove.className = 'select-panel-remove'
   remove.setAttribute('aria-label', 'Remove from selection')
   remove.innerHTML = ICON_CLOSE
   remove.addEventListener('click', () => toggleSelection(item.id))
-  li.append(img, remove)
+  li.append(open, remove)
   panelEntries.set(item.id, li)
   return li
 }

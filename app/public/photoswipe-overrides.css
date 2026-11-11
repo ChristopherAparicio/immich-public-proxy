@@ -55,6 +55,32 @@
   color: #fff;
 }
 
+/* Selection toggle: empty circle, or a filled check when selected. */
+.pswp__button--select-button {
+  color: #fff;
+}
+
+.pswp__button--select-button .ipp-select-on,
+.pswp__button--select-button.ipp-selected .ipp-select-off {
+  display: none;
+}
+
+.pswp__button--select-button.ipp-selected .ipp-select-on {
+  display: inline;
+}
+
+.pswp__top-bar .pswp__button--select-button.ipp-selected .pswp__icn {
+  color: rgb(var(--immich-dark-primary));
+}
+
+/* Selection carousel: a slide removed from the selection stays visible,
+   dimmed, so pressing Space again can restore it. */
+.pswp.ipp-slide-unselected .pswp__item img,
+.pswp.ipp-slide-unselected .pswp__item video {
+  opacity: 0.35;
+  transition: opacity 0.15s;
+}
+
 /* Side arrows: hover-revealed on desktop, hidden by default on mobile */
 .pswp__button--arrow {
   width: 56px;
