@@ -3,6 +3,18 @@
 All notable fork-specific changes are documented here. Upstream history and
 release notes remain available in the upstream repository.
 
+## 3.2.1-immich-share.10 — 2026-11-11
+
+### Added
+
+- Selection panel: while photos are selected, a right-hand column (a bottom
+  sheet on phones) shows their thumbnails, lets each one be removed, and
+  carries the same download action as the toolbar. It collapses to a small
+  pill that keeps the count and the download button; the choice is remembered
+  in `localStorage`. Client-only: no new route, it reuses the gallery's
+  thumbnail URLs and the existing selection download. At most 200 thumbnails
+  are rendered (`+N more` for the rest) so "Select all" stays light.
+
 ## 3.2.1-immich-share.9 — 2026-11-11
 
 ### Fixed

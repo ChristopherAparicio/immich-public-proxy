@@ -386,6 +386,205 @@ html, body {
   }
 }
 
+/* ===== Selection panel: selected thumbnails + download. Right-hand column on
+   desktop, bottom sheet on phones; collapses to a small pill. ===== */
+
+:root {
+  --select-panel-w: 280px;
+}
+
+#select-panel {
+  position: fixed;
+  top: 56px;
+  right: 0;
+  bottom: 0;
+  width: var(--select-panel-w);
+  display: flex;
+  flex-direction: column;
+  background: var(--color-bg);
+  border-left: 1px solid color-mix(in srgb, var(--color-fg) 10%, transparent);
+  z-index: 99;
+}
+
+#select-panel[hidden] {
+  display: none;
+}
+
+body.select-panel-open #gallery {
+  margin-right: var(--select-panel-w);
+}
+
+.select-panel-head {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 12px 6px 4px;
+  border-bottom: 1px solid color-mix(in srgb, var(--color-fg) 10%, transparent);
+}
+
+#select-panel-title {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 15px;
+  font-weight: 500;
+  color: var(--color-fg);
+  white-space: nowrap;
+}
+
+#select-panel-toggle svg {
+  transition: transform 0.15s;
+}
+
+#select-panel-download {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  padding: 6px 14px;
+  width: auto;
+  font-size: 14px;
+  border-radius: 20px;
+  border: none;
+  background: var(--color-primary);
+  color: var(--color-bg);
+  font-weight: 500;
+  cursor: pointer;
+}
+
+#select-panel-download svg {
+  width: 18px;
+  height: 18px;
+}
+
+#select-panel-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+#select-panel-list {
+  list-style: none;
+  margin: 0;
+  padding: 8px;
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 4px;
+}
+
+#select-panel-list li {
+  position: relative;
+  aspect-ratio: 1;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+#select-panel-list img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  border-radius: 4px;
+  background: var(--color-gray);
+}
+
+.select-panel-remove {
+  position: absolute;
+  top: 3px;
+  right: 3px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  margin: 0;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.6);
+  color: #fff;
+  cursor: pointer;
+}
+
+.select-panel-remove svg {
+  width: 14px;
+  height: 14px;
+}
+
+.select-panel-remove:hover,
+.select-panel-remove:focus-visible {
+  background: rgba(0, 0, 0, 0.85);
+}
+
+#select-panel-more {
+  margin: 0 12px 12px;
+  font-size: 13px;
+  color: color-mix(in srgb, var(--color-fg) 65%, transparent);
+}
+
+/* Collapsed: a floating pill keeping the count and the download button. */
+#select-panel.collapsed {
+  top: auto;
+  bottom: 16px;
+  right: 16px;
+  width: auto;
+  border: 1px solid color-mix(in srgb, var(--color-fg) 12%, transparent);
+  border-radius: 28px;
+  box-shadow: 0 2px 12px color-mix(in srgb, var(--color-fg) 15%, transparent);
+}
+
+#select-panel.collapsed .select-panel-head {
+  border-bottom: none;
+}
+
+#select-panel.collapsed #select-panel-body {
+  display: none;
+}
+
+#select-panel.collapsed #select-panel-toggle svg {
+  transform: rotate(180deg);
+}
+
+@media (max-width: 640px) {
+  #select-panel {
+    top: auto;
+    left: 0;
+    width: auto;
+    max-height: 45vh;
+    border-left: none;
+    border-top: 1px solid color-mix(in srgb, var(--color-fg) 10%, transparent);
+    border-radius: 16px 16px 0 0;
+    box-shadow: 0 -2px 12px color-mix(in srgb, var(--color-fg) 10%, transparent);
+  }
+  body.select-panel-open #gallery {
+    margin-right: 0;
+    margin-bottom: 200px;
+  }
+  #select-panel-toggle svg {
+    transform: rotate(90deg);
+  }
+  #select-panel.collapsed #select-panel-toggle svg {
+    transform: rotate(-90deg);
+  }
+  #select-panel-body {
+    overflow-x: auto;
+    overflow-y: hidden;
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+  #select-panel-list {
+    display: flex;
+    gap: 4px;
+  }
+  #select-panel-list li {
+    flex: 0 0 76px;
+    height: 76px;
+  }
+  #select-panel.collapsed {
+    left: auto;
+    border-radius: 28px;
+  }
+}
+
 /* ============================================================================
    Info sidebar. Docks to the right of the lightbox on desktop; becomes a
    bottom sheet on narrow viewports.

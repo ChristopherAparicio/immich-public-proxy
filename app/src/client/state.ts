@@ -26,6 +26,10 @@ export const LONG_PRESS_MS = 500
 export const SIDEBAR_STORAGE_KEY = 'ipp-sidebar-open'
 // Width of the sidebar when docked (must match the CSS rule)
 export const SIDEBAR_WIDTH = 360
+// localStorage key for the selection panel collapsed state
+export const SELECT_PANEL_STORAGE_KEY = 'ipp-select-panel-collapsed'
+// Thumbnails rendered in the selection panel; the rest show as "+N more"
+export const SELECT_PANEL_MAX_THUMBS = 200
 
 // ----- mutable state -------------------------------------------------------
 
