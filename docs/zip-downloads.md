@@ -39,6 +39,13 @@ would expose unnecessary capacity information.
   fit inside `downloadZipDiskBudgetPercent` of the remaining free space. With
   the default 50%, a preparation can consume at most half of that safe pool.
   A conservative fixed and per-entry allowance covers ZIP metadata overhead.
+  The staging limit is derived from that budget and capped by
+  `maxDownloadZipBytes`, so a small selection proceeds even when the pool could
+  not hold two archives at the ceiling. If the real sources outgrow the
+  disk-derived limit, staging stops with HTTP 507 before any ZIP byte is sent.
+- After a complete `GET` of a prepared archive, it is kept for
+  `downloadZipCompletedRetentionSeconds` (5 minutes) for a resume, instead of
+  the full cache lifetime.
 - Archives use STORE because photos and videos are already compressed.
 
 ## Security properties

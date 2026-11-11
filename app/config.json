@@ -12,6 +12,7 @@
     "maxDownloadZipBytes": 2147483648,
     "minDownloadZipFreeBytes": 5368709120,
     "downloadZipCacheTtlSeconds": 1800,
+    "downloadZipCompletedRetentionSeconds": 300,
     "downloadZipQueueMaxWaiting": 3,
     "downloadZipQueueHeartbeatSeconds": 300,
     "downloadZipQueuedPollSeconds": 30,
