@@ -134,6 +134,28 @@ export function Gallery (props: GalleryProps) {
             </button>
           </div>
         )}
+        {props.showDownloadZip && (
+          <aside id="select-panel" aria-label="Selected photos" hidden>
+            <div class="select-panel-head">
+              <button id="select-panel-toggle" class="toolbar-btn" type="button" aria-controls="select-panel-body" aria-expanded="true" aria-label="Hide selected photos">
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <path fill="currentColor" d="M8.59,16.58L13.17,12L8.59,7.41L10,6L16,12L10,18L8.59,16.58Z"/>
+                </svg>
+              </button>
+              <span id="select-panel-title">0 selected</span>
+              <button id="select-panel-download" type="button">
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <path fill="currentColor" d="M5,20H19V18H5M19,9H15V3H9V9H5L12,16L19,9Z"/>
+                </svg>
+                Download
+              </button>
+            </div>
+            <div id="select-panel-body">
+              <ul id="select-panel-list"></ul>
+              <p id="select-panel-more" hidden></p>
+            </div>
+          </aside>
+        )}
         {/* Init params for web.js (read at module load). Using a JSON script
             block avoids the cross-script-type coordination problems that come
             with mixing classic and module scripts. */}
