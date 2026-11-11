@@ -1,0 +1,14 @@
+# Reviewed gitleaks false positives in history (fingerprint = commit:file:rule:line).
+# - docs placeholder header value, synthetic share keys in tests,
+#   and the public lightGallery license key inherited from upstream.
+# New findings must be fixed or reviewed individually, never bulk-added.
+8fa97554201f9d712cdfc7eada845d494862ce05:docs/securing-immich/reverse-proxy.md:curl-auth-header:258
+9d2c3028834b68245b3d7580dcf2ef222f465ba1:app/tests/redact.test.ts:generic-api-key:31
+9d2c3028834b68245b3d7580dcf2ef222f465ba1:app/tests/unlockRequest.test.ts:generic-api-key:5
+7adf1e46b45c298799800de6bdd2dba980ba7402:app/tests/redact.test.ts:generic-api-key:31
+7adf1e46b45c298799800de6bdd2dba980ba7402:app/tests/unlockRequest.test.ts:generic-api-key:5
+695cd64c943a85ff64e1eb022bb7a7e5270c1ffc:app/public/web.js:generic-api-key:17
+8ad444abd40fc1d0b20b7f698fda042358214ef3:app/public/web.js:generic-api-key:38
+5d93fb96629f22a988b2574f985d7c2062c398b3:public/web.js:generic-api-key:8
+356d9280d4345ab3d61a41d71474091c49a19ff7:public/web.js:generic-api-key:8
+6da80385d713a690825129d5592c53a61ef0c079:views/gallery.ejs:generic-api-key:32

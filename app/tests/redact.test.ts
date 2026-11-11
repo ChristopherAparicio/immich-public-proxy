@@ -28,7 +28,7 @@ describe('log redaction', () => {
   })
 
   it('scrubs bare credential-shaped tokens but keeps job ids and asset UUIDs', () => {
-    const shareKey = 'Qw3rTy_uI0pAsDfGhJkLzXcVbNm-1234567890QWERTYUIOPASDFGHJKLZXCVBNM01'
+    const shareKey = 'Qw3rTy_uI0pAsDfGhJkLzXcVbNm-1234567890QWERTYUIOPASDFGHJKLZXCVBNM01' // gitleaks:allow (synthetic test key)
     const redacted = redactSensitiveLogText(
       `key ${shareKey} job abcdefghijklmnopqrstuvwx asset 123e4567-e89b-12d3-a456-426614174000`
     )
