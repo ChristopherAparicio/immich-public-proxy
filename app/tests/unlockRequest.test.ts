@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { unlockRequest } from '../src/session'
 
 describe('unlockRequest validation', () => {
-  const key = 'AbCdEf0123456789-_AbCdEf0123456789-_AbCdEf0123456789-_AbCdEf012345'
+  const key = 'AbCdEf0123456789-_AbCdEf0123456789-_AbCdEf0123456789-_AbCdEf012345' // gitleaks:allow (synthetic test key)
 
   it('accepts a well-formed key and a bounded string password', () => {
     expect(unlockRequest({ key, password: 'hunter2' })).toEqual({ key, password: 'hunter2' })
